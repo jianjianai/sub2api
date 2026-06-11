@@ -16,15 +16,20 @@ import (
 
 type usageRepoStub struct {
 	UsageLogRepository
-	stats      *usagestats.DashboardStats
-	rangeStats *usagestats.DashboardStats
-	err        error
-	rangeErr   error
-	calls      int32
-	rangeCalls int32
-	rangeStart time.Time
-	rangeEnd   time.Time
-	onCall     chan struct{}
+	stats            *usagestats.DashboardStats
+	rangeStats       *usagestats.DashboardStats
+	groupUsage       []usagestats.GroupUsageSummary
+	err              error
+	rangeErr         error
+	groupUsageErr    error
+	calls            int32
+	rangeCalls       int32
+	groupUsageCalls  int32
+	rangeStart       time.Time
+	rangeEnd         time.Time
+	lastTodayStart   time.Time
+	onCall           chan struct{}
+	onGroupUsageCall chan struct{}
 }
 
 func (s *usageRepoStub) GetDashboardStats(ctx context.Context) (*usagestats.DashboardStats, error) {
@@ -52,6 +57,47 @@ func (s *usageRepoStub) GetDashboardStatsWithRange(ctx context.Context, start, e
 		return s.rangeStats, nil
 	}
 	return s.stats, nil
+}
+
+func (s *usageRepoStub) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
+	atomic.AddInt32(&s.groupUsageCalls, 1)
+	s.lastTodayStart = todayStart
+	if s.onGroupUsageCall != nil {
+		select {
+		case s.onGroupUsageCall <- struct{}{}:
+		default:
+		}
+	}
+	if s.groupUsageErr != nil {
+		return nil, s.groupUsageErr
+	}
+	return s.groupUsage, nil
+}
+
+type groupUsageSummaryBlockingRepo struct {
+	UsageLogRepository
+	base    *usageRepoStub
+	release <-chan struct{}
+}
+
+func (r groupUsageSummaryBlockingRepo) GetAllGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
+	atomic.AddInt32(&r.base.groupUsageCalls, 1)
+	r.base.lastTodayStart = todayStart
+	if r.base.onGroupUsageCall != nil {
+		select {
+		case r.base.onGroupUsageCall <- struct{}{}:
+		default:
+		}
+	}
+	select {
+	case <-r.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	if r.base.groupUsageErr != nil {
+		return nil, r.base.groupUsageErr
+	}
+	return r.base.groupUsage, nil
 }
 
 type dashboardCacheStub struct {
@@ -392,4 +438,92 @@ func TestDashboardService_AggDisabled_UsesUsageLogsFallback(t *testing.T) {
 	require.Equal(t, int32(1), atomic.LoadInt32(&repo.rangeCalls))
 	require.False(t, repo.rangeEnd.IsZero())
 	require.Equal(t, truncateToDayUTC(repo.rangeEnd.AddDate(0, 0, -7)), repo.rangeStart)
+}
+
+func TestDashboardService_GroupUsageSummaryCachesSameTodayStart(t *testing.T) {
+	todayStart := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	expected := []usagestats.GroupUsageSummary{
+		{GroupID: 10, TotalCost: 12.5, TodayCost: 1.25},
+	}
+	repo := &usageRepoStub{groupUsage: expected}
+	svc := NewDashboardService(repo, nil, nil, nil)
+
+	first, err := svc.GetGroupUsageSummary(context.Background(), todayStart)
+	require.NoError(t, err)
+	second, err := svc.GetGroupUsageSummary(context.Background(), todayStart)
+	require.NoError(t, err)
+
+	require.Equal(t, expected, first)
+	require.Equal(t, expected, second)
+	require.Equal(t, int32(1), atomic.LoadInt32(&repo.groupUsageCalls))
+}
+
+func TestDashboardService_GroupUsageSummaryCollapsesBurst(t *testing.T) {
+	todayStart := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	repo := &usageRepoStub{
+		groupUsage: []usagestats.GroupUsageSummary{{GroupID: 10, TotalCost: 12.5, TodayCost: 1.25}},
+	}
+	svc := NewDashboardService(repo, nil, nil, nil)
+
+	for i := 0; i < 100; i++ {
+		results, err := svc.GetGroupUsageSummary(context.Background(), todayStart)
+		require.NoError(t, err)
+		require.Len(t, results, 1)
+	}
+
+	require.Equal(t, int32(1), atomic.LoadInt32(&repo.groupUsageCalls))
+}
+
+func TestDashboardService_GroupUsageSummaryCacheSeparatesTodayStart(t *testing.T) {
+	firstDay := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	secondDay := firstDay.Add(24 * time.Hour)
+	repo := &usageRepoStub{
+		groupUsage: []usagestats.GroupUsageSummary{{GroupID: 10, TotalCost: 12.5, TodayCost: 1.25}},
+	}
+	svc := NewDashboardService(repo, nil, nil, nil)
+
+	_, err := svc.GetGroupUsageSummary(context.Background(), firstDay)
+	require.NoError(t, err)
+	_, err = svc.GetGroupUsageSummary(context.Background(), secondDay)
+	require.NoError(t, err)
+
+	require.Equal(t, int32(2), atomic.LoadInt32(&repo.groupUsageCalls))
+	require.Equal(t, secondDay, repo.lastTodayStart)
+}
+
+func TestDashboardService_GroupUsageSummarySingleflightCollapsesConcurrentLoads(t *testing.T) {
+	todayStart := time.Date(2026, 6, 11, 0, 0, 0, 0, time.UTC)
+	started := make(chan struct{}, 1)
+	release := make(chan struct{})
+	blockingRepo := &usageRepoStub{
+		groupUsage:       []usagestats.GroupUsageSummary{{GroupID: 10, TotalCost: 12.5, TodayCost: 1.25}},
+		onGroupUsageCall: started,
+	}
+	svc := NewDashboardService(groupUsageSummaryBlockingRepo{
+		base:    blockingRepo,
+		release: release,
+	}, nil, nil, nil)
+
+	errs := make(chan error, 2)
+	go func() {
+		_, err := svc.GetGroupUsageSummary(context.Background(), todayStart)
+		errs <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("等待首次回源超时")
+	}
+
+	go func() {
+		_, err := svc.GetGroupUsageSummary(context.Background(), todayStart)
+		errs <- err
+	}()
+	time.Sleep(10 * time.Millisecond)
+
+	close(release)
+	require.NoError(t, <-errs)
+	require.NoError(t, <-errs)
+	require.Equal(t, int32(1), atomic.LoadInt32(&blockingRepo.groupUsageCalls))
 }

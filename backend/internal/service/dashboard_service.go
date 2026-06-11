@@ -5,18 +5,21 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/usagestats"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
 	defaultDashboardStatsFreshTTL       = 15 * time.Second
 	defaultDashboardStatsCacheTTL       = 30 * time.Second
 	defaultDashboardStatsRefreshTimeout = 30 * time.Second
+	defaultGroupUsageSummaryCacheTTL    = 30 * time.Second
 )
 
 // ErrDashboardStatsCacheMiss 标记仪表盘缓存未命中。
@@ -38,19 +41,28 @@ type dashboardStatsCacheEntry struct {
 	UpdatedAt int64                      `json:"updated_at"`
 }
 
+type dashboardGroupUsageSummaryCacheEntry struct {
+	results   []usagestats.GroupUsageSummary
+	expiresAt time.Time
+}
+
 // DashboardService 提供管理员仪表盘统计服务。
 type DashboardService struct {
-	usageRepo      UsageLogRepository
-	aggRepo        DashboardAggregationRepository
-	cache          DashboardStatsCache
-	cacheFreshTTL  time.Duration
-	cacheTTL       time.Duration
-	refreshTimeout time.Duration
-	refreshing     int32
-	aggEnabled     bool
-	aggInterval    time.Duration
-	aggLookback    time.Duration
-	aggUsageDays   int
+	usageRepo            UsageLogRepository
+	aggRepo              DashboardAggregationRepository
+	cache                DashboardStatsCache
+	cacheFreshTTL        time.Duration
+	cacheTTL             time.Duration
+	refreshTimeout       time.Duration
+	refreshing           int32
+	aggEnabled           bool
+	aggInterval          time.Duration
+	aggLookback          time.Duration
+	aggUsageDays         int
+	groupUsageSummaryTTL time.Duration
+	groupUsageSummaryMu  sync.RWMutex
+	groupUsageSummary    map[int64]dashboardGroupUsageSummaryCacheEntry
+	groupUsageSummarySF  singleflight.Group
 }
 
 func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregationRepository, cache DashboardStatsCache, cfg *config.Config) *DashboardService {
@@ -89,16 +101,18 @@ func NewDashboardService(usageRepo UsageLogRepository, aggRepo DashboardAggregat
 		aggEnabled = false
 	}
 	return &DashboardService{
-		usageRepo:      usageRepo,
-		aggRepo:        aggRepo,
-		cache:          cache,
-		cacheFreshTTL:  freshTTL,
-		cacheTTL:       cacheTTL,
-		refreshTimeout: refreshTimeout,
-		aggEnabled:     aggEnabled,
-		aggInterval:    aggInterval,
-		aggLookback:    aggLookback,
-		aggUsageDays:   aggUsageDays,
+		usageRepo:            usageRepo,
+		aggRepo:              aggRepo,
+		cache:                cache,
+		cacheFreshTTL:        freshTTL,
+		cacheTTL:             cacheTTL,
+		refreshTimeout:       refreshTimeout,
+		aggEnabled:           aggEnabled,
+		aggInterval:          aggInterval,
+		aggLookback:          aggLookback,
+		aggUsageDays:         aggUsageDays,
+		groupUsageSummaryTTL: defaultGroupUsageSummaryCacheTTL,
+		groupUsageSummary:    make(map[int64]dashboardGroupUsageSummaryCacheEntry),
 	}
 }
 
@@ -171,11 +185,78 @@ func (s *DashboardService) GetGroupStatsWithFilters(ctx context.Context, startTi
 
 // GetGroupUsageSummary returns today's and cumulative cost for all groups.
 func (s *DashboardService) GetGroupUsageSummary(ctx context.Context, todayStart time.Time) ([]usagestats.GroupUsageSummary, error) {
-	results, err := s.usageRepo.GetAllGroupUsageSummary(ctx, todayStart)
+	if results, ok := s.getCachedGroupUsageSummary(todayStart, time.Now()); ok {
+		return results, nil
+	}
+
+	key := groupUsageSummaryCacheKey(todayStart)
+	value, err, _ := s.groupUsageSummarySF.Do(fmt.Sprintf("%d", key), func() (any, error) {
+		if results, ok := s.getCachedGroupUsageSummary(todayStart, time.Now()); ok {
+			return results, nil
+		}
+		results, err := s.usageRepo.GetAllGroupUsageSummary(ctx, todayStart)
+		if err != nil {
+			return nil, err
+		}
+		s.setCachedGroupUsageSummary(todayStart, results, time.Now())
+		return cloneGroupUsageSummaries(results), nil
+	})
 	if err != nil {
 		return nil, fmt.Errorf("get group usage summary: %w", err)
 	}
-	return results, nil
+	results, _ := value.([]usagestats.GroupUsageSummary)
+	return cloneGroupUsageSummaries(results), nil
+}
+
+func groupUsageSummaryCacheKey(todayStart time.Time) int64 {
+	return todayStart.UTC().UnixNano()
+}
+
+func cloneGroupUsageSummaries(results []usagestats.GroupUsageSummary) []usagestats.GroupUsageSummary {
+	if results == nil {
+		return nil
+	}
+	cloned := make([]usagestats.GroupUsageSummary, len(results))
+	copy(cloned, results)
+	return cloned
+}
+
+func (s *DashboardService) getCachedGroupUsageSummary(todayStart time.Time, now time.Time) ([]usagestats.GroupUsageSummary, bool) {
+	if s.groupUsageSummaryTTL <= 0 {
+		return nil, false
+	}
+	key := groupUsageSummaryCacheKey(todayStart)
+	s.groupUsageSummaryMu.RLock()
+	entry, ok := s.groupUsageSummary[key]
+	s.groupUsageSummaryMu.RUnlock()
+	if !ok {
+		return nil, false
+	}
+	if !now.Before(entry.expiresAt) {
+		s.groupUsageSummaryMu.Lock()
+		if current, exists := s.groupUsageSummary[key]; exists && current.expiresAt.Equal(entry.expiresAt) {
+			delete(s.groupUsageSummary, key)
+		}
+		s.groupUsageSummaryMu.Unlock()
+		return nil, false
+	}
+	return cloneGroupUsageSummaries(entry.results), true
+}
+
+func (s *DashboardService) setCachedGroupUsageSummary(todayStart time.Time, results []usagestats.GroupUsageSummary, now time.Time) {
+	if s.groupUsageSummaryTTL <= 0 {
+		return
+	}
+	key := groupUsageSummaryCacheKey(todayStart)
+	s.groupUsageSummaryMu.Lock()
+	if s.groupUsageSummary == nil {
+		s.groupUsageSummary = make(map[int64]dashboardGroupUsageSummaryCacheEntry)
+	}
+	s.groupUsageSummary[key] = dashboardGroupUsageSummaryCacheEntry{
+		results:   cloneGroupUsageSummaries(results),
+		expiresAt: now.Add(s.groupUsageSummaryTTL),
+	}
+	s.groupUsageSummaryMu.Unlock()
 }
 
 func (s *DashboardService) getCachedDashboardStats(ctx context.Context) (*usagestats.DashboardStats, bool, error) {
