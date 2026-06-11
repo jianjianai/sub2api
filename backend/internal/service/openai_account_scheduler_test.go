@@ -83,11 +83,12 @@ func (r schedulerGroupAwareOpenAIAccountRepo) ListSchedulableUngroupedByPlatform
 
 type schedulerTestConcurrencyCache struct {
 	ConcurrencyCache
-	loadBatchErr    error
-	loadMap         map[int64]*AccountLoadInfo
-	acquireResults  map[int64]bool
-	waitCounts      map[int64]int
-	skipDefaultLoad bool
+	loadBatchErr      error
+	loadMap           map[int64]*AccountLoadInfo
+	acquireResults    map[int64]bool
+	waitCounts        map[int64]int
+	skipDefaultLoad   bool
+	loadBatchSizeSink *[]int
 }
 
 func (c schedulerTestConcurrencyCache) AcquireAccountSlot(ctx context.Context, accountID int64, maxConcurrency int, requestID string) (bool, error) {
@@ -104,6 +105,9 @@ func (c schedulerTestConcurrencyCache) ReleaseAccountSlot(ctx context.Context, a
 }
 
 func (c schedulerTestConcurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
+	if c.loadBatchSizeSink != nil {
+		*c.loadBatchSizeSink = append(*c.loadBatchSizeSink, len(accounts))
+	}
 	if c.loadBatchErr != nil {
 		return nil, c.loadBatchErr
 	}
@@ -2186,6 +2190,100 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_LoadBalanceDistributesA
 
 	// 多 session 应该能打散到多个账号，避免“恒定单账号命中”。
 	require.GreaterOrEqual(t, len(selected), 2)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_LimitsLoadBatchCandidateSet(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(39101)
+	const accountCount = 500
+
+	accounts := make([]Account, 0, accountCount)
+	for i := 0; i < accountCount; i++ {
+		accounts = append(accounts, Account{
+			ID:          int64(391000 + i),
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    i,
+			GroupIDs:    []int64{groupID},
+			AccountGroups: []AccountGroup{{
+				GroupID: groupID,
+			}},
+		})
+	}
+
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	cfg.Gateway.OpenAIWS.LBTopK = 1
+	loadBatchSizes := []int{}
+	svc := &OpenAIGatewayService{
+		accountRepo:        schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts}},
+		cfg:                cfg,
+		rateLimitService:   newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{loadBatchSizeSink: &loadBatchSizes}),
+	}
+
+	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_limited_load_batch", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	require.Equal(t, accountCount, decision.CandidateCount)
+	require.NotEmpty(t, loadBatchSizes)
+	require.LessOrEqual(t, loadBatchSizes[0], 32)
+}
+
+func TestOpenAIGatewayService_SelectAccountWithScheduler_LoadBatchLimitFallsBackToNextWindow(t *testing.T) {
+	ctx := context.Background()
+	groupID := int64(39102)
+	const accountCount = 40
+
+	accounts := make([]Account, 0, accountCount)
+	acquireResults := make(map[int64]bool, accountCount)
+	for i := 0; i < accountCount; i++ {
+		id := int64(392000 + i)
+		accounts = append(accounts, Account{
+			ID:          id,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeOAuth,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Priority:    i,
+			GroupIDs:    []int64{groupID},
+			AccountGroups: []AccountGroup{{
+				GroupID: groupID,
+			}},
+		})
+		acquireResults[id] = i >= 32
+	}
+
+	cfg := &config.Config{}
+	cfg.Gateway.Scheduling.LoadBatchEnabled = true
+	cfg.Gateway.OpenAIWS.LBTopK = 7
+	loadBatchSizes := []int{}
+	svc := &OpenAIGatewayService{
+		accountRepo:      schedulerGroupAwareOpenAIAccountRepo{schedulerTestOpenAIAccountRepo: schedulerTestOpenAIAccountRepo{accounts: accounts}},
+		cfg:              cfg,
+		rateLimitService: newOpenAIAdvancedSchedulerRateLimitService("true"),
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{
+			acquireResults:    acquireResults,
+			loadBatchSizeSink: &loadBatchSizes,
+		}),
+	}
+
+	selection, _, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_limited_load_batch_fallback", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.GreaterOrEqual(t, selection.Account.ID, int64(392032))
+	require.Less(t, selection.Account.ID, int64(392040))
+	require.GreaterOrEqual(t, len(loadBatchSizes), 3)
+	require.Equal(t, 32, loadBatchSizes[0])
+	require.Equal(t, 32, loadBatchSizes[1])
+	require.LessOrEqual(t, loadBatchSizes[2], 8)
 }
 
 func TestDeriveOpenAISelectionSeed_NoAffinityAddsEntropy(t *testing.T) {
