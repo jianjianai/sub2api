@@ -21,6 +21,7 @@ const (
 	schedulerVersionPrefix      = "sched:ver:"
 	schedulerSnapshotPrefix     = "sched:"
 	schedulerLockPrefix         = "sched:lock:"
+	schedulerFullRebuildLockKey = "sched:full_rebuild:lock"
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
@@ -285,6 +286,14 @@ func (c *schedulerCache) TryLockBucket(ctx context.Context, bucket service.Sched
 func (c *schedulerCache) UnlockBucket(ctx context.Context, bucket service.SchedulerBucket) error {
 	key := schedulerBucketKey(schedulerLockPrefix, bucket)
 	return c.rdb.Del(ctx, key).Err()
+}
+
+func (c *schedulerCache) TryLockFullRebuild(ctx context.Context, ttl time.Duration) (bool, error) {
+	return c.rdb.SetNX(ctx, schedulerFullRebuildLockKey, time.Now().UnixNano(), ttl).Result()
+}
+
+func (c *schedulerCache) UnlockFullRebuild(ctx context.Context) error {
+	return c.rdb.Del(ctx, schedulerFullRebuildLockKey).Err()
 }
 
 func (c *schedulerCache) ListBuckets(ctx context.Context) ([]service.SchedulerBucket, error) {

@@ -50,6 +50,14 @@ func (c *snapshotHydrationCache) UnlockBucket(ctx context.Context, bucket Schedu
 	return nil
 }
 
+func (c *snapshotHydrationCache) TryLockFullRebuild(ctx context.Context, ttl time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (c *snapshotHydrationCache) UnlockFullRebuild(ctx context.Context) error {
+	return nil
+}
+
 func (c *snapshotHydrationCache) ListBuckets(ctx context.Context) ([]SchedulerBucket, error) {
 	return nil, nil
 }

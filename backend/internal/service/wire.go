@@ -262,11 +262,12 @@ func ProvideUserMessageQueueService(cache UserMsgQueueCache, rpmCache RPMCache, 
 func ProvideSchedulerSnapshotService(
 	cache SchedulerCache,
 	outboxRepo SchedulerOutboxRepository,
+	rebuildJobRepo SchedulerRebuildJobRepository,
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
-	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg, rebuildJobRepo)
 	svc.Start()
 	return svc
 }

@@ -1093,13 +1093,19 @@ type GatewaySchedulingConfig struct {
 	// Outbox 轮询与滞后阈值配置
 	// Outbox 轮询周期（秒）
 	OutboxPollIntervalSeconds int `mapstructure:"outbox_poll_interval_seconds"`
+	// Outbox 每批最多读取事件数
+	OutboxPollBatchSize int `mapstructure:"outbox_poll_batch_size"`
+	// Outbox 每个 tick 最多 drain 批次数
+	OutboxDrainMaxBatchesPerTick int `mapstructure:"outbox_drain_max_batches_per_tick"`
+	// Outbox 每个 tick 最长 drain 时间（秒）
+	OutboxDrainMaxDurationSeconds int `mapstructure:"outbox_drain_max_duration_seconds"`
 	// Outbox 滞后告警阈值（秒）
 	OutboxLagWarnSeconds int `mapstructure:"outbox_lag_warn_seconds"`
-	// Outbox 触发强制重建阈值（秒）
+	// Deprecated: Outbox 滞后不再触发强制重建；该字段仅保留兼容老配置。
 	OutboxLagRebuildSeconds int `mapstructure:"outbox_lag_rebuild_seconds"`
-	// Outbox 连续滞后触发次数
+	// Deprecated: Outbox 滞后不再触发强制重建；该字段仅保留兼容老配置。
 	OutboxLagRebuildFailures int `mapstructure:"outbox_lag_rebuild_failures"`
-	// Outbox 积压触发重建阈值（行数）
+	// Deprecated: Outbox 积压不再触发强制重建；该字段仅用于 warning 日志阈值。
 	OutboxBacklogRebuildRows int `mapstructure:"outbox_backlog_rebuild_rows"`
 
 	// 全量重建周期配置
@@ -1937,6 +1943,9 @@ func setDefaults() {
 	viper.SetDefault("gateway.scheduling.db_fallback_timeout_seconds", 0)
 	viper.SetDefault("gateway.scheduling.db_fallback_max_qps", 0)
 	viper.SetDefault("gateway.scheduling.outbox_poll_interval_seconds", 1)
+	viper.SetDefault("gateway.scheduling.outbox_poll_batch_size", 1000)
+	viper.SetDefault("gateway.scheduling.outbox_drain_max_batches_per_tick", 8)
+	viper.SetDefault("gateway.scheduling.outbox_drain_max_duration_seconds", 8)
 	viper.SetDefault("gateway.scheduling.outbox_lag_warn_seconds", 5)
 	viper.SetDefault("gateway.scheduling.outbox_lag_rebuild_seconds", 10)
 	viper.SetDefault("gateway.scheduling.outbox_lag_rebuild_failures", 3)
@@ -2795,25 +2804,29 @@ func (c *Config) Validate() error {
 	if c.Gateway.Scheduling.OutboxPollIntervalSeconds <= 0 {
 		return fmt.Errorf("gateway.scheduling.outbox_poll_interval_seconds must be positive")
 	}
+	if c.Gateway.Scheduling.OutboxPollBatchSize < 1 || c.Gateway.Scheduling.OutboxPollBatchSize > 10000 {
+		return fmt.Errorf("gateway.scheduling.outbox_poll_batch_size must be between 1-10000")
+	}
+	if c.Gateway.Scheduling.OutboxDrainMaxBatchesPerTick < 1 || c.Gateway.Scheduling.OutboxDrainMaxBatchesPerTick > 100 {
+		return fmt.Errorf("gateway.scheduling.outbox_drain_max_batches_per_tick must be between 1-100")
+	}
+	if c.Gateway.Scheduling.OutboxDrainMaxDurationSeconds < 1 {
+		return fmt.Errorf("gateway.scheduling.outbox_drain_max_duration_seconds must be positive")
+	}
 	if c.Gateway.Scheduling.OutboxLagWarnSeconds < 0 {
 		return fmt.Errorf("gateway.scheduling.outbox_lag_warn_seconds must be non-negative")
 	}
 	if c.Gateway.Scheduling.OutboxLagRebuildSeconds < 0 {
 		return fmt.Errorf("gateway.scheduling.outbox_lag_rebuild_seconds must be non-negative")
 	}
-	if c.Gateway.Scheduling.OutboxLagRebuildFailures <= 0 {
-		return fmt.Errorf("gateway.scheduling.outbox_lag_rebuild_failures must be positive")
+	if c.Gateway.Scheduling.OutboxLagRebuildFailures < 0 {
+		return fmt.Errorf("gateway.scheduling.outbox_lag_rebuild_failures must be non-negative")
 	}
 	if c.Gateway.Scheduling.OutboxBacklogRebuildRows < 0 {
 		return fmt.Errorf("gateway.scheduling.outbox_backlog_rebuild_rows must be non-negative")
 	}
 	if c.Gateway.Scheduling.FullRebuildIntervalSeconds < 0 {
 		return fmt.Errorf("gateway.scheduling.full_rebuild_interval_seconds must be non-negative")
-	}
-	if c.Gateway.Scheduling.OutboxLagWarnSeconds > 0 &&
-		c.Gateway.Scheduling.OutboxLagRebuildSeconds > 0 &&
-		c.Gateway.Scheduling.OutboxLagRebuildSeconds < c.Gateway.Scheduling.OutboxLagWarnSeconds {
-		return fmt.Errorf("gateway.scheduling.outbox_lag_rebuild_seconds must be >= outbox_lag_warn_seconds")
 	}
 	if c.Ops.MetricsCollectorCache.TTL < 0 {
 		return fmt.Errorf("ops.metrics_collector_cache.ttl must be non-negative")

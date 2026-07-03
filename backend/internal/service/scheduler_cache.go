@@ -61,6 +61,10 @@ type SchedulerCache interface {
 	TryLockBucket(ctx context.Context, bucket SchedulerBucket, ttl time.Duration) (bool, error)
 	// UnlockBucket 释放分桶重建锁。
 	UnlockBucket(ctx context.Context, bucket SchedulerBucket) error
+	// TryLockFullRebuild 尝试获取全局全量重建锁。
+	TryLockFullRebuild(ctx context.Context, ttl time.Duration) (bool, error)
+	// UnlockFullRebuild 释放全局全量重建锁。
+	UnlockFullRebuild(ctx context.Context) error
 	// ListBuckets 返回已注册的分桶集合。
 	ListBuckets(ctx context.Context) ([]SchedulerBucket, error)
 	// GetOutboxWatermark 读取 outbox 水位。

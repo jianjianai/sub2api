@@ -79,6 +79,15 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	if cfg.Gateway.Scheduling.SlotCleanupInterval != 30*time.Second {
 		t.Fatalf("SlotCleanupInterval = %v, want 30s", cfg.Gateway.Scheduling.SlotCleanupInterval)
 	}
+	if cfg.Gateway.Scheduling.OutboxPollBatchSize != 1000 {
+		t.Fatalf("OutboxPollBatchSize = %d, want 1000", cfg.Gateway.Scheduling.OutboxPollBatchSize)
+	}
+	if cfg.Gateway.Scheduling.OutboxDrainMaxBatchesPerTick != 8 {
+		t.Fatalf("OutboxDrainMaxBatchesPerTick = %d, want 8", cfg.Gateway.Scheduling.OutboxDrainMaxBatchesPerTick)
+	}
+	if cfg.Gateway.Scheduling.OutboxDrainMaxDurationSeconds != 8 {
+		t.Fatalf("OutboxDrainMaxDurationSeconds = %d, want 8", cfg.Gateway.Scheduling.OutboxDrainMaxDurationSeconds)
+	}
 }
 
 func TestLoadDefaultOpenAIWSConfig(t *testing.T) {
@@ -290,6 +299,7 @@ func TestLoadIdempotencyConfigFromEnv(t *testing.T) {
 func TestLoadSchedulingConfigFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING", "5")
+	t.Setenv("GATEWAY_SCHEDULING_OUTBOX_POLL_BATCH_SIZE", "512")
 
 	cfg, err := Load()
 	if err != nil {
@@ -298,6 +308,9 @@ func TestLoadSchedulingConfigFromEnv(t *testing.T) {
 
 	if cfg.Gateway.Scheduling.StickySessionMaxWaiting != 5 {
 		t.Fatalf("StickySessionMaxWaiting = %d, want 5", cfg.Gateway.Scheduling.StickySessionMaxWaiting)
+	}
+	if cfg.Gateway.Scheduling.OutboxPollBatchSize != 512 {
+		t.Fatalf("OutboxPollBatchSize = %d, want 512", cfg.Gateway.Scheduling.OutboxPollBatchSize)
 	}
 }
 
@@ -1532,16 +1545,23 @@ func TestValidateConfigErrors(t *testing.T) {
 			wantErr: "gateway.scheduling.outbox_poll_interval_seconds",
 		},
 		{
-			name:    "gateway scheduling outbox failures",
-			mutate:  func(c *Config) { c.Gateway.Scheduling.OutboxLagRebuildFailures = 0 },
-			wantErr: "gateway.scheduling.outbox_lag_rebuild_failures",
+			name:    "gateway scheduling outbox batch size",
+			mutate:  func(c *Config) { c.Gateway.Scheduling.OutboxPollBatchSize = 10001 },
+			wantErr: "gateway.scheduling.outbox_poll_batch_size",
 		},
 		{
-			name: "gateway outbox lag rebuild",
-			mutate: func(c *Config) {
-				c.Gateway.Scheduling.OutboxLagWarnSeconds = 10
-				c.Gateway.Scheduling.OutboxLagRebuildSeconds = 5
-			},
+			name:    "gateway scheduling outbox drain batches",
+			mutate:  func(c *Config) { c.Gateway.Scheduling.OutboxDrainMaxBatchesPerTick = 0 },
+			wantErr: "gateway.scheduling.outbox_drain_max_batches_per_tick",
+		},
+		{
+			name:    "gateway scheduling outbox drain duration",
+			mutate:  func(c *Config) { c.Gateway.Scheduling.OutboxDrainMaxDurationSeconds = 0 },
+			wantErr: "gateway.scheduling.outbox_drain_max_duration_seconds",
+		},
+		{
+			name:    "gateway outbox lag rebuild deprecated non-negative",
+			mutate:  func(c *Config) { c.Gateway.Scheduling.OutboxLagRebuildSeconds = -1 },
 			wantErr: "gateway.scheduling.outbox_lag_rebuild_seconds",
 		},
 		{

@@ -73,6 +73,14 @@ func (s *schedulerCacheRecorder) UnlockBucket(ctx context.Context, bucket servic
 	return nil
 }
 
+func (s *schedulerCacheRecorder) TryLockFullRebuild(ctx context.Context, ttl time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (s *schedulerCacheRecorder) UnlockFullRebuild(ctx context.Context) error {
+	return nil
+}
+
 func (s *schedulerCacheRecorder) ListBuckets(ctx context.Context) ([]service.SchedulerBucket, error) {
 	return nil, nil
 }

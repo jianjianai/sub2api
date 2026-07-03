@@ -452,13 +452,19 @@ gateway:
     db_fallback_max_qps: 0
     # outbox 轮询周期（秒）
     outbox_poll_interval_seconds: 1
+    # outbox 每批最多读取事件数
+    outbox_poll_batch_size: 1000
+    # outbox 每个 tick 最多 drain 批次数
+    outbox_drain_max_batches_per_tick: 8
+    # outbox 每个 tick 最长 drain 时间（秒）
+    outbox_drain_max_duration_seconds: 8
     # outbox 滞后告警阈值（秒）
     outbox_lag_warn_seconds: 5
-    # outbox 触发强制重建阈值（秒）
+    # Deprecated: outbox 滞后不再触发强制重建，仅保留兼容老配置
     outbox_lag_rebuild_seconds: 10
-    # outbox 连续滞后触发次数
+    # Deprecated: outbox 滞后不再触发强制重建，仅保留兼容老配置
     outbox_lag_rebuild_failures: 3
-    # outbox 积压触发重建阈值（行数）
+    # Deprecated: outbox 积压不再触发强制重建，仅作为 backlog warning 阈值
     outbox_backlog_rebuild_rows: 10000
     # 全量重建周期（秒），0 表示禁用
     full_rebuild_interval_seconds: 300

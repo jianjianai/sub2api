@@ -46,6 +46,14 @@ func (c *outboxCleanupCache) UnlockBucket(ctx context.Context, bucket SchedulerB
 	return nil
 }
 
+func (c *outboxCleanupCache) TryLockFullRebuild(ctx context.Context, ttl time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (c *outboxCleanupCache) UnlockFullRebuild(ctx context.Context) error {
+	return nil
+}
+
 func (c *outboxCleanupCache) ListBuckets(ctx context.Context) ([]SchedulerBucket, error) {
 	return nil, nil
 }
@@ -152,6 +160,7 @@ func TestSchedulerSnapshotServicePollOutboxCleansConsumedRowsAfterWatermark(t *t
 	svc := NewSchedulerSnapshotService(cache, repo, nil, nil, nil)
 
 	svc.pollOutbox()
+	svc.wg.Wait()
 
 	if cache.watermark != 10000 {
 		t.Fatalf("expected watermark 10000, got %d", cache.watermark)
@@ -187,6 +196,7 @@ func TestSchedulerSnapshotServicePollOutboxSkipsCleanupWhenLockUnavailable(t *te
 	svc := NewSchedulerSnapshotService(cache, repo, nil, nil, nil)
 
 	svc.pollOutbox()
+	svc.wg.Wait()
 
 	if cache.watermark != 3 {
 		t.Fatalf("expected watermark 3, got %d", cache.watermark)
@@ -225,6 +235,7 @@ func TestSchedulerSnapshotServicePollOutboxDoesNotCleanupOnHandleFailure(t *test
 	svc := NewSchedulerSnapshotService(cache, repo, nil, nil, nil)
 
 	svc.pollOutbox()
+	svc.wg.Wait()
 
 	if len(cache.setWatermarks) != 0 {
 		t.Fatalf("expected no watermark write on handle failure, got %#v", cache.setWatermarks)
