@@ -621,7 +621,7 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 			slog.Debug("scheduler_score_rebuild_ok", "bucket", bucket.String(), "reason", reason, "bucket_size", len(accounts), "duration_ms", time.Since(start).Milliseconds())
 		}
 	}
-	if s.candidateIndex != nil && s.schedulerCandidateIndexRebuildEnabled() {
+	if s.candidateIndex != nil && s.schedulerCandidateIndexRebuildEnabled(rebuildCtx) {
 		// 候选索引服务真实调度热路径。写失败只影响 index 命中率，不能阻断快照重建。
 		if bucket.Platform != PlatformOpenAI || bucket.Mode != SchedulerModeSingle {
 			if err := s.candidateIndex.DeleteBucket(rebuildCtx, bucket); err != nil {
@@ -832,8 +832,14 @@ func (s *SchedulerSnapshotService) isRunModeSimple() bool {
 	return s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
 }
 
-func (s *SchedulerSnapshotService) schedulerCandidateIndexRebuildEnabled() bool {
-	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorCandidateIndexRebuildEnabled
+func (s *SchedulerSnapshotService) schedulerCandidateIndexRebuildEnabled(ctx context.Context) bool {
+	if s == nil {
+		return false
+	}
+	if s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorCandidateIndexRebuildEnabled {
+		return true
+	}
+	return s.scoreService != nil && s.scoreService.openAICandidateIndexSchedulerEnabled(ctx)
 }
 
 func (s *SchedulerSnapshotService) outboxPollInterval() time.Duration {

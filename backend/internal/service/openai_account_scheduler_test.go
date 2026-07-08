@@ -325,6 +325,15 @@ func newOpenAIAdvancedSchedulerRateLimitService(enabled string, values ...string
 	if len(values) > 1 && values[1] != "" {
 		repo.values[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = values[1]
 	}
+	if len(values) > 2 && values[2] != "" {
+		repo.values[SettingKeyOpenAICandidateIndexSchedulerEnabled] = values[2]
+	}
+	if len(values) > 3 && values[3] != "" {
+		repo.values[SettingKeyOpenAICandidateIndexSchedulerPageSize] = values[3]
+	}
+	if len(values) > 4 && values[4] != "" {
+		repo.values[SettingKeyOpenAICandidateIndexSchedulerMaxScan] = values[4]
+	}
 	return &RateLimitService{
 		settingService: NewSettingService(repo, &config.Config{}),
 	}
@@ -377,6 +386,9 @@ func TestOpenAIGatewayService_OpenAIAdvancedSchedulerRuntimeSettings_DBOverrides
 	repo := &openAIAdvancedSchedulerSettingRepoStub{
 		values: map[string]string{
 			openAIAdvancedSchedulerSettingKey:                       "true",
+			SettingKeyOpenAICandidateIndexSchedulerEnabled:          "true",
+			SettingKeyOpenAICandidateIndexSchedulerPageSize:         "512",
+			SettingKeyOpenAICandidateIndexSchedulerMaxScan:          "5000",
 			SettingKeyOpenAIAdvancedSchedulerLBTopK:                 "3",
 			SettingKeyOpenAIAdvancedSchedulerWeightPriority:         "2.5",
 			SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse: "12",
@@ -394,6 +406,31 @@ func TestOpenAIGatewayService_OpenAIAdvancedSchedulerRuntimeSettings_DBOverrides
 	require.Equal(t, 2.0, weights.Load)
 	require.Equal(t, 12.0, weights.Previous)
 	require.Equal(t, 9.0, weights.SessionSticky)
+	runtimeSettings := svc.openAIAdvancedSchedulerRuntimeSettings(ctx)
+	require.True(t, runtimeSettings.candidateIndexEnabled)
+	require.Equal(t, 512, svc.openAISelectorCandidatePageSize(ctx))
+	require.Equal(t, 5000, svc.openAISelectorMaxScan(ctx))
+	require.True(t, svc.openAISelectorIndexEnabled(ctx))
+}
+
+func TestSchedulerSnapshotService_CandidateIndexRebuildUsesAdminCandidateIndexScheduler(t *testing.T) {
+	resetOpenAIAdvancedSchedulerSettingCacheForTest()
+	defer resetOpenAIAdvancedSchedulerSettingCacheForTest()
+
+	cfg := &config.Config{}
+	repo := &openAIAdvancedSchedulerSettingRepoStub{
+		values: map[string]string{
+			openAIAdvancedSchedulerSettingKey:              "true",
+			SettingKeyOpenAICandidateIndexSchedulerEnabled: "true",
+		},
+	}
+	scoreService := NewSchedulerScoreService(nil, nil, &RateLimitService{settingService: NewSettingService(repo, cfg)}, cfg)
+	snapshotService := &SchedulerSnapshotService{cfg: cfg, scoreService: scoreService}
+
+	require.True(t, snapshotService.schedulerCandidateIndexRebuildEnabled(context.Background()))
+
+	repo.values[openAIAdvancedSchedulerSettingKey] = "false"
+	require.False(t, snapshotService.schedulerCandidateIndexRebuildEnabled(context.Background()))
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_DefaultDisabledUsesLegacyLoadAwareness(t *testing.T) {

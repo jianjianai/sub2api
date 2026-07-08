@@ -221,6 +221,11 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEnabled                         bool
 	OpenAIAdvancedSchedulerStickyWeightedEnabled           bool
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled     bool
+	OpenAICandidateIndexSchedulerEnabled                   bool
+	OpenAICandidateIndexSchedulerPageSize                  string
+	OpenAICandidateIndexSchedulerMaxScan                   string
+	OpenAICandidateIndexSchedulerEffectivePageSize         string
+	OpenAICandidateIndexSchedulerEffectiveMaxScan          string
 	OpenAIAdvancedSchedulerLBTopK                          string
 	OpenAIAdvancedSchedulerWeightPriority                  string
 	OpenAIAdvancedSchedulerWeightLoad                      string

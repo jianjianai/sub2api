@@ -58,6 +58,13 @@ func NewSchedulerScoreService(
 	}
 }
 
+func (s *SchedulerScoreService) openAICandidateIndexSchedulerEnabled(ctx context.Context) bool {
+	if s == nil || s.rateLimitService == nil || s.rateLimitService.settingService == nil {
+		return false
+	}
+	return s.rateLimitService.settingService.IsOpenAICandidateIndexSchedulerEnabled(ctx)
+}
+
 type AccountListSchedulerScore struct {
 	AccountID             int64
 	GroupID               *int64

@@ -165,6 +165,15 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.openaiExperimentalScheduler.stickyWeightedDescription": "开启后 previous_response_id 和 session_hash 粘性进入高级调度打分；关闭时仍按旧逻辑硬命中粘性账号。",
     "admin.settings.openaiExperimentalScheduler.subscriptionPriorityTitle": "订阅优先",
     "admin.settings.openaiExperimentalScheduler.subscriptionPriorityDescription": "开启后先在 ChatGPT 订阅账号池中按权值选取；订阅池拿不到席位时再回退到非订阅账号池。",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexTitle": "OpenAI 候选索引调度引擎",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexDescription": "开启后调度快照会构建候选索引，OpenAI 账号选择优先走索引分页扫描；索引缺失或扫描超限时仍自动回退旧路径。",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexPerformance": "性能收益主要体现在选号阶段：账号池达到数百到数千规模、分组/模型过滤较多或 Redis 负载读取放大时，通常可减少约 70%-90% 的候选扫描与批量负载读取；100 个以内账号收益通常不明显，具体以监控延迟为准。",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexSettingsTitle": "候选索引参数",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexRecommendation": "推荐：200 个以上 OpenAI 可调度账号、选号延迟升高或 Redis 读压力明显时开启；几十个账号或低并发环境可保持关闭。",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexPageSizeLabel": "候选页大小",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexPageSizeHint": "默认 256。200-1000 个账号建议 256；1000+ 或过滤条件多建议 512；命中率高且追求更低单次读取可用 128。",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexMaxScanLabel": "最大扫描候选数",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexMaxScanHint": "默认 2000。500 个以内账号建议 500-1000；500-3000 个账号建议 2000；3000+ 或模型/分组过滤较重建议 5000。",
     "admin.settings.openaiExperimentalScheduler.weightsTitle": "调度权值覆盖",
     "admin.settings.openaiExperimentalScheduler.weightsDescription": "留空时使用配置/环境变量值；配置未设置时使用内置默认值。页面非空设置优先。",
     "admin.settings.openaiExperimentalScheduler.defaultPlaceholder": "配置/默认：{value}",
@@ -431,6 +440,11 @@ const baseSettingsResponse = {
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
+  openai_candidate_index_scheduler_enabled: false,
+  openai_candidate_index_scheduler_page_size: "",
+  openai_candidate_index_scheduler_max_scan: "",
+  openai_candidate_index_scheduler_effective_page_size: "256",
+  openai_candidate_index_scheduler_effective_max_scan: "2000",
   openai_advanced_scheduler_lb_top_k: "",
   openai_advanced_scheduler_weight_priority: "",
   openai_advanced_scheduler_weight_load: "",
@@ -815,6 +829,38 @@ describe("admin SettingsView payment visible method controls", () => {
       "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑",
     );
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+  });
+
+  it("submits the OpenAI candidate index scheduler gateway settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      openai_advanced_scheduler_enabled: true,
+      openai_candidate_index_scheduler_enabled: true,
+      openai_candidate_index_scheduler_page_size: "512",
+      openai_candidate_index_scheduler_max_scan: "5000",
+    });
+
+    const wrapper = mountView();
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("OpenAI 候选索引调度引擎");
+    expect(wrapper.text()).toContain("70%-90%");
+    expect(wrapper.text()).toContain("200 个以上 OpenAI 可调度账号");
+    expect(wrapper.text()).toContain("候选页大小");
+    expect(wrapper.text()).toContain("最大扫描候选数");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        openai_advanced_scheduler_enabled: true,
+        openai_candidate_index_scheduler_enabled: true,
+        openai_candidate_index_scheduler_page_size: "512",
+        openai_candidate_index_scheduler_max_scan: "5000",
+      }),
+    );
   });
 
   it("passes translated upload and remove labels to the payment help image uploader", async () => {

@@ -155,6 +155,10 @@ func (s *helperConcurrencyCacheStub) GetAccountsLoadBatch(ctx context.Context, a
 	return out, nil
 }
 
+func (s *helperConcurrencyCacheStub) GetActiveAccountLoadMap(ctx context.Context) (map[int64]*service.AccountLoadInfo, error) {
+	return map[int64]*service.AccountLoadInfo{}, nil
+}
+
 func (s *helperConcurrencyCacheStub) GetUsersLoadBatch(ctx context.Context, users []service.UserWithConcurrency) (map[int64]*service.UserLoadInfo, error) {
 	out := make(map[int64]*service.UserLoadInfo, len(users))
 	for _, user := range users {

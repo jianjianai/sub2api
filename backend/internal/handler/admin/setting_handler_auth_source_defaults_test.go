@@ -224,6 +224,9 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 		"payment_visible_method_wxpay_enabled":                    false,
 		"openai_advanced_scheduler_enabled":                       true,
 		"openai_advanced_scheduler_subscription_priority_enabled": true,
+		"openai_candidate_index_scheduler_enabled":                true,
+		"openai_candidate_index_scheduler_page_size":              "512",
+		"openai_candidate_index_scheduler_max_scan":               "5000",
 	}
 	rawBody, err := json.Marshal(body)
 	require.NoError(t, err)
@@ -242,6 +245,9 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, "false", repo.values[service.SettingPaymentVisibleMethodWxpayEnabled])
 	require.Equal(t, "true", repo.values["openai_advanced_scheduler_enabled"])
 	require.Equal(t, "true", repo.values[service.SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
+	require.Equal(t, "true", repo.values[service.SettingKeyOpenAICandidateIndexSchedulerEnabled])
+	require.Equal(t, "512", repo.values[service.SettingKeyOpenAICandidateIndexSchedulerPageSize])
+	require.Equal(t, "5000", repo.values[service.SettingKeyOpenAICandidateIndexSchedulerMaxScan])
 
 	var resp response.Response
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
@@ -253,6 +259,9 @@ func TestSettingHandler_UpdateSettings_PersistsPaymentVisibleMethodsAndAdvancedS
 	require.Equal(t, false, data["payment_visible_method_wxpay_enabled"])
 	require.Equal(t, true, data["openai_advanced_scheduler_enabled"])
 	require.Equal(t, true, data["openai_advanced_scheduler_subscription_priority_enabled"])
+	require.Equal(t, true, data["openai_candidate_index_scheduler_enabled"])
+	require.Equal(t, "512", data["openai_candidate_index_scheduler_page_size"])
+	require.Equal(t, "5000", data["openai_candidate_index_scheduler_max_scan"])
 }
 
 func TestSettingHandler_UpdateSettings_PreservesLegacyBlankPaymentVisibleMethodSource(t *testing.T) {

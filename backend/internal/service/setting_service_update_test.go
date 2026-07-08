@@ -311,6 +311,9 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 		OpenAIAdvancedSchedulerEnabled:                     true,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:       true,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled: true,
+		OpenAICandidateIndexSchedulerEnabled:               true,
+		OpenAICandidateIndexSchedulerPageSize:              " 512 ",
+		OpenAICandidateIndexSchedulerMaxScan:               "5000",
 		OpenAIAdvancedSchedulerLBTopK:                      " 3 ",
 		OpenAIAdvancedSchedulerWeightPriority:              "2.50",
 		OpenAIAdvancedSchedulerWeightLoad:                  "0",
@@ -330,6 +333,9 @@ func TestSettingService_UpdateSettings_PaymentVisibleMethodsAndAdvancedScheduler
 	require.Equal(t, "true", repo.updates[openAIAdvancedSchedulerSettingKey])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled])
 	require.Equal(t, "true", repo.updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled])
+	require.Equal(t, "true", repo.updates[SettingKeyOpenAICandidateIndexSchedulerEnabled])
+	require.Equal(t, "512", repo.updates[SettingKeyOpenAICandidateIndexSchedulerPageSize])
+	require.Equal(t, "5000", repo.updates[SettingKeyOpenAICandidateIndexSchedulerMaxScan])
 	require.Equal(t, "3", repo.updates[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 	require.Equal(t, "2.5", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightPriority])
 	require.Equal(t, "0", repo.updates[SettingKeyOpenAIAdvancedSchedulerWeightLoad])
@@ -357,6 +363,9 @@ func TestSettingService_GetAllSettings_OpenAIAdvancedSchedulerEffectiveValuesUse
 		SessionSticky:    10,
 	}
 	svc := NewSettingService(&settingGetAllRepoStub{values: map[string]string{
+		SettingKeyOpenAICandidateIndexSchedulerEnabled:       "true",
+		SettingKeyOpenAICandidateIndexSchedulerPageSize:      "512",
+		SettingKeyOpenAICandidateIndexSchedulerMaxScan:       "5000",
 		SettingKeyOpenAIAdvancedSchedulerLBTopK:              "3",
 		SettingKeyOpenAIAdvancedSchedulerWeightPriority:      "99",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky: "88",
@@ -364,6 +373,11 @@ func TestSettingService_GetAllSettings_OpenAIAdvancedSchedulerEffectiveValuesUse
 
 	settings, err := svc.GetAllSettings(context.Background())
 	require.NoError(t, err)
+	require.True(t, settings.OpenAICandidateIndexSchedulerEnabled)
+	require.Equal(t, "512", settings.OpenAICandidateIndexSchedulerPageSize)
+	require.Equal(t, "5000", settings.OpenAICandidateIndexSchedulerMaxScan)
+	require.Equal(t, "256", settings.OpenAICandidateIndexSchedulerEffectivePageSize)
+	require.Equal(t, "2000", settings.OpenAICandidateIndexSchedulerEffectiveMaxScan)
 	require.Equal(t, "3", settings.OpenAIAdvancedSchedulerLBTopK)
 	require.Equal(t, "99", settings.OpenAIAdvancedSchedulerWeightPriority)
 	require.Equal(t, "88", settings.OpenAIAdvancedSchedulerWeightSessionSticky)

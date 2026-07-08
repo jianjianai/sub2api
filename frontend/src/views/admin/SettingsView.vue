@@ -4060,6 +4060,100 @@
 
               <div
                 v-if="form.openai_advanced_scheduler_enabled"
+                class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700"
+              >
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.openaiExperimentalScheduler.candidateIndexTitle") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.openaiExperimentalScheduler.candidateIndexDescription")
+                    }}
+                  </p>
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.openaiExperimentalScheduler.candidateIndexPerformance")
+                    }}
+                  </p>
+                </div>
+                <Toggle v-model="form.openai_candidate_index_scheduler_enabled" />
+              </div>
+
+              <div
+                v-if="
+                  form.openai_advanced_scheduler_enabled &&
+                  form.openai_candidate_index_scheduler_enabled
+                "
+                class="border-t border-gray-100 pt-5 dark:border-dark-700"
+              >
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{ t("admin.settings.openaiExperimentalScheduler.candidateIndexSettingsTitle") }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t("admin.settings.openaiExperimentalScheduler.candidateIndexRecommendation")
+                    }}
+                  </p>
+                </div>
+
+                <div class="mt-4 grid grid-cols-1 gap-4 md:grid-cols-2">
+                  <label class="block">
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.openaiExperimentalScheduler.candidateIndexPageSizeLabel") }}
+                    </span>
+                    <input
+                      v-model="form.openai_candidate_index_scheduler_page_size"
+                      class="input mt-1"
+                      inputmode="numeric"
+                      :placeholder="
+                        t('admin.settings.openaiExperimentalScheduler.defaultPlaceholder', {
+                          value:
+                            form.openai_candidate_index_scheduler_effective_page_size ||
+                            '256',
+                        })
+                      "
+                      type="text"
+                    />
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.openaiExperimentalScheduler.candidateIndexPageSizeHint")
+                      }}
+                    </p>
+                  </label>
+                  <label class="block">
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ t("admin.settings.openaiExperimentalScheduler.candidateIndexMaxScanLabel") }}
+                    </span>
+                    <input
+                      v-model="form.openai_candidate_index_scheduler_max_scan"
+                      class="input mt-1"
+                      inputmode="numeric"
+                      :placeholder="
+                        t('admin.settings.openaiExperimentalScheduler.defaultPlaceholder', {
+                          value:
+                            form.openai_candidate_index_scheduler_effective_max_scan ||
+                            '2000',
+                        })
+                      "
+                      type="text"
+                    />
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      {{
+                        t("admin.settings.openaiExperimentalScheduler.candidateIndexMaxScanHint")
+                      }}
+                    </p>
+                  </label>
+                </div>
+              </div>
+
+              <div
+                v-if="form.openai_advanced_scheduler_enabled"
                 class="border-t border-gray-100 pt-5 dark:border-dark-700"
               >
                 <div>
@@ -8013,6 +8107,11 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_enabled: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled: boolean;
   openai_advanced_scheduler_subscription_priority_enabled: boolean;
+  openai_candidate_index_scheduler_enabled: boolean;
+  openai_candidate_index_scheduler_page_size: string;
+  openai_candidate_index_scheduler_max_scan: string;
+  openai_candidate_index_scheduler_effective_page_size: string;
+  openai_candidate_index_scheduler_effective_max_scan: string;
   openai_advanced_scheduler_lb_top_k: string;
   openai_advanced_scheduler_weight_priority: string;
   openai_advanced_scheduler_weight_load: string;
@@ -8217,6 +8316,11 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_enabled: false,
   openai_advanced_scheduler_sticky_weighted_enabled: false,
   openai_advanced_scheduler_subscription_priority_enabled: false,
+  openai_candidate_index_scheduler_enabled: false,
+  openai_candidate_index_scheduler_page_size: "",
+  openai_candidate_index_scheduler_max_scan: "",
+  openai_candidate_index_scheduler_effective_page_size: "256",
+  openai_candidate_index_scheduler_effective_max_scan: "2000",
   openai_advanced_scheduler_lb_top_k: "",
   openai_advanced_scheduler_weight_priority: "",
   openai_advanced_scheduler_weight_load: "",
@@ -9595,6 +9699,12 @@ async function saveSettings() {
         form.openai_advanced_scheduler_sticky_weighted_enabled,
       openai_advanced_scheduler_subscription_priority_enabled:
         form.openai_advanced_scheduler_subscription_priority_enabled,
+      openai_candidate_index_scheduler_enabled:
+        form.openai_candidate_index_scheduler_enabled,
+      openai_candidate_index_scheduler_page_size:
+        form.openai_candidate_index_scheduler_page_size.trim(),
+      openai_candidate_index_scheduler_max_scan:
+        form.openai_candidate_index_scheduler_max_scan.trim(),
       openai_advanced_scheduler_lb_top_k:
         form.openai_advanced_scheduler_lb_top_k.trim(),
       openai_advanced_scheduler_weight_priority:

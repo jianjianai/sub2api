@@ -2234,6 +2234,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[openAIAdvancedSchedulerSettingKey] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerStickyWeightedEnabled)
 	updates[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] = strconv.FormatBool(settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled)
+	updates[SettingKeyOpenAICandidateIndexSchedulerEnabled] = strconv.FormatBool(settings.OpenAICandidateIndexSchedulerEnabled)
+	updates[SettingKeyOpenAICandidateIndexSchedulerPageSize] = settings.OpenAICandidateIndexSchedulerPageSize
+	updates[SettingKeyOpenAICandidateIndexSchedulerMaxScan] = settings.OpenAICandidateIndexSchedulerMaxScan
 	updates[SettingKeyOpenAIAdvancedSchedulerLBTopK] = settings.OpenAIAdvancedSchedulerLBTopK
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPriority] = settings.OpenAIAdvancedSchedulerWeightPriority
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightLoad] = settings.OpenAIAdvancedSchedulerWeightLoad
@@ -2394,6 +2397,9 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 		enabled:                     settings.OpenAIAdvancedSchedulerEnabled,
 		stickyWeightedEnabled:       settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		subscriptionPriorityEnabled: settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		candidateIndexEnabled:       settings.OpenAICandidateIndexSchedulerEnabled,
+		candidateIndexPageSize:      parsePositiveIntOverride(settings.OpenAICandidateIndexSchedulerPageSize),
+		candidateIndexMaxScan:       parsePositiveIntOverride(settings.OpenAICandidateIndexSchedulerMaxScan),
 		lbTopKOverride:              parsePositiveIntOverride(settings.OpenAIAdvancedSchedulerLBTopK),
 		weightOverrides: parseOpenAIAdvancedSchedulerWeightOverrides(map[string]string{
 			SettingKeyOpenAIAdvancedSchedulerWeightPriority:         settings.OpenAIAdvancedSchedulerWeightPriority,
@@ -2432,6 +2438,26 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 
 func (s *SettingService) defaultRewriteMessageCacheControl() bool {
 	return false
+}
+
+func (s *SettingService) IsOpenAICandidateIndexSchedulerEnabled(ctx context.Context) bool {
+	if s == nil || s.settingRepo == nil {
+		return false
+	}
+	values, err := s.settingRepo.GetMultiple(ctx, []string{
+		openAIAdvancedSchedulerSettingKey,
+		SettingKeyOpenAICandidateIndexSchedulerEnabled,
+	})
+	if err == nil {
+		return strings.EqualFold(strings.TrimSpace(values[openAIAdvancedSchedulerSettingKey]), "true") &&
+			strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAICandidateIndexSchedulerEnabled]), "true")
+	}
+
+	advanced, advancedErr := s.settingRepo.GetValue(ctx, openAIAdvancedSchedulerSettingKey)
+	selector, selectorErr := s.settingRepo.GetValue(ctx, SettingKeyOpenAICandidateIndexSchedulerEnabled)
+	return advancedErr == nil && selectorErr == nil &&
+		strings.EqualFold(strings.TrimSpace(advanced), "true") &&
+		strings.EqualFold(strings.TrimSpace(selector), "true")
 }
 
 func (s *SettingService) validateDefaultSubscriptionGroups(ctx context.Context, items []DefaultSubscriptionSetting) error {
@@ -3238,6 +3264,9 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		openAIAdvancedSchedulerSettingKey:                            "false",
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled:       "false",
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled: "false",
+		SettingKeyOpenAICandidateIndexSchedulerEnabled:               "false",
+		SettingKeyOpenAICandidateIndexSchedulerPageSize:              "",
+		SettingKeyOpenAICandidateIndexSchedulerMaxScan:               "",
 		SettingKeyOpenAIAdvancedSchedulerLBTopK:                      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPriority:              "",
 		SettingKeyOpenAIAdvancedSchedulerWeightLoad:                  "",
@@ -3812,6 +3841,11 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerEnabled = settings[openAIAdvancedSchedulerSettingKey] == "true"
 	result.OpenAIAdvancedSchedulerStickyWeightedEnabled = settings[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled] == "true"
 	result.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled = settings[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled] == "true"
+	result.OpenAICandidateIndexSchedulerEnabled = settings[SettingKeyOpenAICandidateIndexSchedulerEnabled] == "true"
+	result.OpenAICandidateIndexSchedulerPageSize = strings.TrimSpace(settings[SettingKeyOpenAICandidateIndexSchedulerPageSize])
+	result.OpenAICandidateIndexSchedulerMaxScan = strings.TrimSpace(settings[SettingKeyOpenAICandidateIndexSchedulerMaxScan])
+	result.OpenAICandidateIndexSchedulerEffectivePageSize = s.openAICandidateIndexSchedulerEffectivePageSize()
+	result.OpenAICandidateIndexSchedulerEffectiveMaxScan = s.openAICandidateIndexSchedulerEffectiveMaxScan()
 	result.OpenAIAdvancedSchedulerLBTopK = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 	result.OpenAIAdvancedSchedulerWeightPriority = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightPriority])
 	result.OpenAIAdvancedSchedulerWeightLoad = strings.TrimSpace(settings[SettingKeyOpenAIAdvancedSchedulerWeightLoad])
@@ -3912,6 +3946,20 @@ func (s *SettingService) openAIAdvancedSchedulerEffectiveLBTopK() string {
 	return "7"
 }
 
+func (s *SettingService) openAICandidateIndexSchedulerEffectivePageSize() string {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorCandidatePageSize > 0 {
+		return strconv.Itoa(s.cfg.Gateway.OpenAIScheduler.SelectorCandidatePageSize)
+	}
+	return "256"
+}
+
+func (s *SettingService) openAICandidateIndexSchedulerEffectiveMaxScan() string {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorMaxScan > 0 {
+		return strconv.Itoa(s.cfg.Gateway.OpenAIScheduler.SelectorMaxScan)
+	}
+	return "2000"
+}
+
 func (s *SettingService) openAIAdvancedSchedulerEffectiveWeights() config.GatewayOpenAIWSSchedulerScoreWeights {
 	defaults := config.GatewayOpenAIWSSchedulerScoreWeights{
 		Priority:         1.0,
@@ -3941,6 +3989,18 @@ func formatOpenAIAdvancedSchedulerFloat(value float64) string {
 }
 
 func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *SystemSettings) error {
+	pageSize, err := normalizeOptionalPositiveIntString(settings.OpenAICandidateIndexSchedulerPageSize)
+	if err != nil {
+		return infraerrors.BadRequest("INVALID_OPENAI_CANDIDATE_INDEX_SCHEDULER_PAGE_SIZE", "openai candidate index scheduler page size must be a positive integer or empty")
+	}
+	settings.OpenAICandidateIndexSchedulerPageSize = pageSize
+
+	maxScan, err := normalizeOptionalPositiveIntString(settings.OpenAICandidateIndexSchedulerMaxScan)
+	if err != nil {
+		return infraerrors.BadRequest("INVALID_OPENAI_CANDIDATE_INDEX_SCHEDULER_MAX_SCAN", "openai candidate index scheduler max scan must be a positive integer or empty")
+	}
+	settings.OpenAICandidateIndexSchedulerMaxScan = maxScan
+
 	lbTopK, err := normalizeOptionalPositiveIntString(settings.OpenAIAdvancedSchedulerLBTopK)
 	if err != nil {
 		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_LB_TOP_K", "openai advanced scheduler TopK must be a positive integer or empty")

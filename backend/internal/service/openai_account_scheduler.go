@@ -41,6 +41,9 @@ type cachedOpenAIAdvancedSchedulerSetting struct {
 	enabled                     bool
 	stickyWeightedEnabled       bool
 	subscriptionPriorityEnabled bool
+	candidateIndexEnabled       bool
+	candidateIndexPageSize      int
+	candidateIndexMaxScan       int
 	lbTopKOverride              int
 	weightOverrides             map[string]float64
 	expiresAt                   int64
@@ -50,6 +53,9 @@ type openAIAdvancedSchedulerRuntimeSettings struct {
 	enabled                     bool
 	stickyWeightedEnabled       bool
 	subscriptionPriorityEnabled bool
+	candidateIndexEnabled       bool
+	candidateIndexPageSize      int
+	candidateIndexMaxScan       int
 	lbTopKOverride              int
 	weightOverrides             map[string]float64
 }
@@ -1183,8 +1189,8 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalanceIndexed(
 		return nil, 0, 0, 0, nil, false
 	}
 	bucket := s.service.openAISelectorBucket(req)
-	pageSize := s.service.openAISelectorCandidatePageSize()
-	maxScan := s.service.openAISelectorMaxScan()
+	pageSize := s.service.openAISelectorCandidatePageSize(ctx)
+	maxScan := s.service.openAISelectorMaxScan(ctx)
 	filtered := make([]*Account, 0, pageSize)
 	scanned := 0
 	start := 0
@@ -1279,8 +1285,8 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalanceIndexedShadow(
 		return 0, 0, 0, 0, "index_unavailable"
 	}
 	bucket := s.service.openAISelectorBucket(req)
-	pageSize := s.service.openAISelectorCandidatePageSize()
-	maxScan := s.service.openAISelectorMaxScan()
+	pageSize := s.service.openAISelectorCandidatePageSize(ctx)
+	maxScan := s.service.openAISelectorMaxScan(ctx)
 	filtered := make([]*Account, 0, pageSize)
 	scanned, pages, start := 0, 0, 0
 	var schedGroup *Group
@@ -1782,6 +1788,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				enabled:                     cached.enabled,
 				stickyWeightedEnabled:       cached.stickyWeightedEnabled,
 				subscriptionPriorityEnabled: cached.subscriptionPriorityEnabled,
+				candidateIndexEnabled:       cached.candidateIndexEnabled,
+				candidateIndexPageSize:      cached.candidateIndexPageSize,
+				candidateIndexMaxScan:       cached.candidateIndexMaxScan,
 				lbTopKOverride:              cached.lbTopKOverride,
 				weightOverrides:             cloneOpenAIAdvancedSchedulerWeightOverrides(cached.weightOverrides),
 			}
@@ -1795,6 +1804,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 					enabled:                     cached.enabled,
 					stickyWeightedEnabled:       cached.stickyWeightedEnabled,
 					subscriptionPriorityEnabled: cached.subscriptionPriorityEnabled,
+					candidateIndexEnabled:       cached.candidateIndexEnabled,
+					candidateIndexPageSize:      cached.candidateIndexPageSize,
+					candidateIndexMaxScan:       cached.candidateIndexMaxScan,
 					lbTopKOverride:              cached.lbTopKOverride,
 					weightOverrides:             cloneOpenAIAdvancedSchedulerWeightOverrides(cached.weightOverrides),
 				}, nil
@@ -1804,6 +1816,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 		enabled := false
 		stickyWeightedEnabled := false
 		subscriptionPriorityEnabled := false
+		candidateIndexEnabled := false
+		candidateIndexPageSize := 0
+		candidateIndexMaxScan := 0
 		lbTopKOverride := 0
 		weightOverrides := map[string]float64{}
 		if repo := s.openAIAdvancedSchedulerSettingRepo(); repo != nil {
@@ -1814,6 +1829,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				enabled = strings.EqualFold(strings.TrimSpace(values[openAIAdvancedSchedulerSettingKey]), "true")
 				stickyWeightedEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled]), "true")
 				subscriptionPriorityEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled]), "true")
+				candidateIndexEnabled = strings.EqualFold(strings.TrimSpace(values[SettingKeyOpenAICandidateIndexSchedulerEnabled]), "true")
+				candidateIndexPageSize = parsePositiveIntOverride(values[SettingKeyOpenAICandidateIndexSchedulerPageSize])
+				candidateIndexMaxScan = parsePositiveIntOverride(values[SettingKeyOpenAICandidateIndexSchedulerMaxScan])
 				lbTopKOverride = parsePositiveIntOverride(values[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 				weightOverrides = parseOpenAIAdvancedSchedulerWeightOverrides(values)
 			} else {
@@ -1829,6 +1847,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 				enabled = strings.EqualFold(strings.TrimSpace(fallbackValues[openAIAdvancedSchedulerSettingKey]), "true")
 				stickyWeightedEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled]), "true")
 				subscriptionPriorityEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled]), "true")
+				candidateIndexEnabled = strings.EqualFold(strings.TrimSpace(fallbackValues[SettingKeyOpenAICandidateIndexSchedulerEnabled]), "true")
+				candidateIndexPageSize = parsePositiveIntOverride(fallbackValues[SettingKeyOpenAICandidateIndexSchedulerPageSize])
+				candidateIndexMaxScan = parsePositiveIntOverride(fallbackValues[SettingKeyOpenAICandidateIndexSchedulerMaxScan])
 				lbTopKOverride = parsePositiveIntOverride(fallbackValues[SettingKeyOpenAIAdvancedSchedulerLBTopK])
 				weightOverrides = parseOpenAIAdvancedSchedulerWeightOverrides(fallbackValues)
 			}
@@ -1838,6 +1859,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 			enabled:                     enabled,
 			stickyWeightedEnabled:       stickyWeightedEnabled,
 			subscriptionPriorityEnabled: subscriptionPriorityEnabled,
+			candidateIndexEnabled:       candidateIndexEnabled,
+			candidateIndexPageSize:      candidateIndexPageSize,
+			candidateIndexMaxScan:       candidateIndexMaxScan,
 			lbTopKOverride:              lbTopKOverride,
 			weightOverrides:             cloneOpenAIAdvancedSchedulerWeightOverrides(weightOverrides),
 			expiresAt:                   time.Now().Add(openAIAdvancedSchedulerSettingCacheTTL).UnixNano(),
@@ -1846,6 +1870,9 @@ func (s *OpenAIGatewayService) openAIAdvancedSchedulerRuntimeSettings(ctx contex
 			enabled:                     enabled,
 			stickyWeightedEnabled:       stickyWeightedEnabled,
 			subscriptionPriorityEnabled: subscriptionPriorityEnabled,
+			candidateIndexEnabled:       candidateIndexEnabled,
+			candidateIndexPageSize:      candidateIndexPageSize,
+			candidateIndexMaxScan:       candidateIndexMaxScan,
 			lbTopKOverride:              lbTopKOverride,
 			weightOverrides:             weightOverrides,
 		}, nil
@@ -1869,11 +1896,19 @@ func (s *OpenAIGatewayService) isOpenAIAdvancedSchedulerSubscriptionPriorityEnab
 	return settings.enabled && settings.subscriptionPriorityEnabled
 }
 
+func (s *OpenAIGatewayService) isOpenAICandidateIndexSchedulerEnabled(ctx context.Context) bool {
+	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
+	return settings.enabled && settings.candidateIndexEnabled
+}
+
 func openAIAdvancedSchedulerRuntimeSettingKeys() []string {
 	keys := []string{
 		openAIAdvancedSchedulerSettingKey,
 		SettingKeyOpenAIAdvancedSchedulerStickyWeightedEnabled,
 		SettingKeyOpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		SettingKeyOpenAICandidateIndexSchedulerEnabled,
+		SettingKeyOpenAICandidateIndexSchedulerPageSize,
+		SettingKeyOpenAICandidateIndexSchedulerMaxScan,
 		SettingKeyOpenAIAdvancedSchedulerLBTopK,
 	}
 	for _, spec := range openAIAdvancedSchedulerWeightOverrideSpecs() {
@@ -2245,21 +2280,31 @@ func (s *OpenAIGatewayService) openAISelectorCandidateIndex() SchedulerCandidate
 }
 
 func (s *OpenAIGatewayService) openAISelectorIndexEnabled(ctx context.Context) bool {
-	if s == nil || s.cfg == nil {
+	if s == nil {
 		return false
 	}
-	_ = ctx
-	return s.cfg.Gateway.OpenAIScheduler.SelectorIndexEnabled
+	if s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorIndexEnabled {
+		return true
+	}
+	return s.isOpenAICandidateIndexSchedulerEnabled(ctx)
 }
 
-func (s *OpenAIGatewayService) openAISelectorCandidatePageSize() int {
+func (s *OpenAIGatewayService) openAISelectorCandidatePageSize(ctx context.Context) int {
+	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
+	if settings.enabled && settings.candidateIndexPageSize > 0 {
+		return settings.candidateIndexPageSize
+	}
 	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorCandidatePageSize > 0 {
 		return s.cfg.Gateway.OpenAIScheduler.SelectorCandidatePageSize
 	}
 	return 256
 }
 
-func (s *OpenAIGatewayService) openAISelectorMaxScan() int {
+func (s *OpenAIGatewayService) openAISelectorMaxScan(ctx context.Context) int {
+	settings := s.openAIAdvancedSchedulerRuntimeSettings(ctx)
+	if settings.enabled && settings.candidateIndexMaxScan > 0 {
+		return settings.candidateIndexMaxScan
+	}
 	if s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorMaxScan > 0 {
 		return s.cfg.Gateway.OpenAIScheduler.SelectorMaxScan
 	}

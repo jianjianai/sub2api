@@ -871,6 +871,11 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_enabled": true,
 					"openai_advanced_scheduler_sticky_weighted_enabled": false,
 					"openai_advanced_scheduler_subscription_priority_enabled": false,
+					"openai_candidate_index_scheduler_enabled": false,
+					"openai_candidate_index_scheduler_page_size": "",
+					"openai_candidate_index_scheduler_max_scan": "",
+					"openai_candidate_index_scheduler_effective_page_size": "256",
+					"openai_candidate_index_scheduler_effective_max_scan": "2000",
 					"openai_advanced_scheduler_lb_top_k": "",
 					"openai_advanced_scheduler_weight_priority": "",
 					"openai_advanced_scheduler_weight_load": "",
@@ -1143,6 +1148,11 @@ func TestAPIContracts(t *testing.T) {
 					"openai_advanced_scheduler_enabled": false,
 					"openai_advanced_scheduler_sticky_weighted_enabled": false,
 					"openai_advanced_scheduler_subscription_priority_enabled": false,
+					"openai_candidate_index_scheduler_enabled": false,
+					"openai_candidate_index_scheduler_page_size": "",
+					"openai_candidate_index_scheduler_max_scan": "",
+					"openai_candidate_index_scheduler_effective_page_size": "256",
+					"openai_candidate_index_scheduler_effective_max_scan": "2000",
 					"openai_advanced_scheduler_lb_top_k": "",
 					"openai_advanced_scheduler_weight_priority": "",
 					"openai_advanced_scheduler_weight_load": "",
@@ -1368,7 +1378,7 @@ func newContractDeps(t *testing.T) *contractDeps {
 	apiKeyHandler := handler.NewAPIKeyHandler(apiKeyService)
 	usageHandler := handler.NewUsageHandler(usageService, apiKeyService, nil, nil)
 	adminSettingHandler := adminhandler.NewSettingHandler(settingService, nil, nil, nil, nil, nil, nil)
-	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	adminAccountHandler := adminhandler.NewAccountHandler(adminService, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	jwtAuth := func(c *gin.Context) {
 		c.Set(string(middleware.ContextKeyUser), middleware.AuthSubject{

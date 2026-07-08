@@ -276,6 +276,11 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEnabled:                         settings.OpenAIAdvancedSchedulerEnabled,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           settings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     settings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		OpenAICandidateIndexSchedulerEnabled:                   settings.OpenAICandidateIndexSchedulerEnabled,
+		OpenAICandidateIndexSchedulerPageSize:                  settings.OpenAICandidateIndexSchedulerPageSize,
+		OpenAICandidateIndexSchedulerMaxScan:                   settings.OpenAICandidateIndexSchedulerMaxScan,
+		OpenAICandidateIndexSchedulerEffectivePageSize:         settings.OpenAICandidateIndexSchedulerEffectivePageSize,
+		OpenAICandidateIndexSchedulerEffectiveMaxScan:          settings.OpenAICandidateIndexSchedulerEffectiveMaxScan,
 		OpenAIAdvancedSchedulerLBTopK:                          settings.OpenAIAdvancedSchedulerLBTopK,
 		OpenAIAdvancedSchedulerWeightPriority:                  settings.OpenAIAdvancedSchedulerWeightPriority,
 		OpenAIAdvancedSchedulerWeightLoad:                      settings.OpenAIAdvancedSchedulerWeightLoad,
@@ -644,6 +649,9 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerEnabled                     *bool   `json:"openai_advanced_scheduler_enabled"`
 	OpenAIAdvancedSchedulerStickyWeightedEnabled       *bool   `json:"openai_advanced_scheduler_sticky_weighted_enabled"`
 	OpenAIAdvancedSchedulerSubscriptionPriorityEnabled *bool   `json:"openai_advanced_scheduler_subscription_priority_enabled"`
+	OpenAICandidateIndexSchedulerEnabled               *bool   `json:"openai_candidate_index_scheduler_enabled"`
+	OpenAICandidateIndexSchedulerPageSize              *string `json:"openai_candidate_index_scheduler_page_size"`
+	OpenAICandidateIndexSchedulerMaxScan               *string `json:"openai_candidate_index_scheduler_max_scan"`
 	OpenAIAdvancedSchedulerLBTopK                      *string `json:"openai_advanced_scheduler_lb_top_k"`
 	OpenAIAdvancedSchedulerWeightPriority              *string `json:"openai_advanced_scheduler_weight_priority"`
 	OpenAIAdvancedSchedulerWeightLoad                  *string `json:"openai_advanced_scheduler_weight_load"`
@@ -1840,6 +1848,14 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 			}
 			return previousSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled
 		}(),
+		OpenAICandidateIndexSchedulerEnabled: func() bool {
+			if req.OpenAICandidateIndexSchedulerEnabled != nil {
+				return *req.OpenAICandidateIndexSchedulerEnabled
+			}
+			return previousSettings.OpenAICandidateIndexSchedulerEnabled
+		}(),
+		OpenAICandidateIndexSchedulerPageSize:         stringSetting(req.OpenAICandidateIndexSchedulerPageSize, previousSettings.OpenAICandidateIndexSchedulerPageSize),
+		OpenAICandidateIndexSchedulerMaxScan:          stringSetting(req.OpenAICandidateIndexSchedulerMaxScan, previousSettings.OpenAICandidateIndexSchedulerMaxScan),
 		OpenAIAdvancedSchedulerLBTopK:                 stringSetting(req.OpenAIAdvancedSchedulerLBTopK, previousSettings.OpenAIAdvancedSchedulerLBTopK),
 		OpenAIAdvancedSchedulerWeightPriority:         stringSetting(req.OpenAIAdvancedSchedulerWeightPriority, previousSettings.OpenAIAdvancedSchedulerWeightPriority),
 		OpenAIAdvancedSchedulerWeightLoad:             stringSetting(req.OpenAIAdvancedSchedulerWeightLoad, previousSettings.OpenAIAdvancedSchedulerWeightLoad),
@@ -2226,6 +2242,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEnabled:                         updatedSettings.OpenAIAdvancedSchedulerEnabled,
 		OpenAIAdvancedSchedulerStickyWeightedEnabled:           updatedSettings.OpenAIAdvancedSchedulerStickyWeightedEnabled,
 		OpenAIAdvancedSchedulerSubscriptionPriorityEnabled:     updatedSettings.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled,
+		OpenAICandidateIndexSchedulerEnabled:                   updatedSettings.OpenAICandidateIndexSchedulerEnabled,
+		OpenAICandidateIndexSchedulerPageSize:                  updatedSettings.OpenAICandidateIndexSchedulerPageSize,
+		OpenAICandidateIndexSchedulerMaxScan:                   updatedSettings.OpenAICandidateIndexSchedulerMaxScan,
+		OpenAICandidateIndexSchedulerEffectivePageSize:         updatedSettings.OpenAICandidateIndexSchedulerEffectivePageSize,
+		OpenAICandidateIndexSchedulerEffectiveMaxScan:          updatedSettings.OpenAICandidateIndexSchedulerEffectiveMaxScan,
 		OpenAIAdvancedSchedulerLBTopK:                          updatedSettings.OpenAIAdvancedSchedulerLBTopK,
 		OpenAIAdvancedSchedulerWeightPriority:                  updatedSettings.OpenAIAdvancedSchedulerWeightPriority,
 		OpenAIAdvancedSchedulerWeightLoad:                      updatedSettings.OpenAIAdvancedSchedulerWeightLoad,
@@ -2765,6 +2786,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled != after.OpenAIAdvancedSchedulerSubscriptionPriorityEnabled {
 		changed = append(changed, "openai_advanced_scheduler_subscription_priority_enabled")
+	}
+	if before.OpenAICandidateIndexSchedulerEnabled != after.OpenAICandidateIndexSchedulerEnabled {
+		changed = append(changed, "openai_candidate_index_scheduler_enabled")
+	}
+	if before.OpenAICandidateIndexSchedulerPageSize != after.OpenAICandidateIndexSchedulerPageSize {
+		changed = append(changed, "openai_candidate_index_scheduler_page_size")
+	}
+	if before.OpenAICandidateIndexSchedulerMaxScan != after.OpenAICandidateIndexSchedulerMaxScan {
+		changed = append(changed, "openai_candidate_index_scheduler_max_scan")
 	}
 	if before.OpenAIAdvancedSchedulerLBTopK != after.OpenAIAdvancedSchedulerLBTopK {
 		changed = append(changed, "openai_advanced_scheduler_lb_top_k")

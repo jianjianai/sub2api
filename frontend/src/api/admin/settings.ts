@@ -609,6 +609,11 @@ export interface SystemSettings {
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
+  openai_candidate_index_scheduler_enabled?: boolean;
+  openai_candidate_index_scheduler_page_size?: string;
+  openai_candidate_index_scheduler_max_scan?: string;
+  openai_candidate_index_scheduler_effective_page_size?: string;
+  openai_candidate_index_scheduler_effective_max_scan?: string;
   openai_advanced_scheduler_lb_top_k?: string;
   openai_advanced_scheduler_weight_priority?: string;
   openai_advanced_scheduler_weight_load?: string;
@@ -881,6 +886,9 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_enabled?: boolean;
   openai_advanced_scheduler_sticky_weighted_enabled?: boolean;
   openai_advanced_scheduler_subscription_priority_enabled?: boolean;
+  openai_candidate_index_scheduler_enabled?: boolean;
+  openai_candidate_index_scheduler_page_size?: string;
+  openai_candidate_index_scheduler_max_scan?: string;
   openai_advanced_scheduler_lb_top_k?: string;
   openai_advanced_scheduler_weight_priority?: string;
   openai_advanced_scheduler_weight_load?: string;
