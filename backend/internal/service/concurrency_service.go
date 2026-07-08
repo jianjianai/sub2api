@@ -43,6 +43,8 @@ type ConcurrencyCache interface {
 
 	// 批量负载查询（只读）
 	GetAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error)
+	// GetActiveAccountLoadMap 只返回当前活跃索引中的账号负载；调用方负责按账号配置重算 LoadRate。
+	GetActiveAccountLoadMap(ctx context.Context) (map[int64]*AccountLoadInfo, error)
 	GetUsersLoadBatch(ctx context.Context, users []UserWithConcurrency) (map[int64]*UserLoadInfo, error)
 
 	// 清理过期槽位（后台任务）
@@ -96,6 +98,7 @@ const (
 	defaultAccountLoadBatchCacheTTL = 200 * time.Millisecond
 	accountLoadBatchFetchTimeout    = 3 * time.Second
 	maxAccountLoadBatchCacheEntries = 256
+	activeAccountLoadMapCacheKey    = "active_load_map"
 	apiKeyConcurrencyFetchTimeout   = 3 * time.Second
 	apiKeySlotTrackTimeout          = 2 * time.Second
 )
@@ -410,6 +413,42 @@ func (s *ConcurrencyService) GetAccountsLoadBatchFresh(ctx context.Context, acco
 	return s.getAccountsLoadBatch(ctx, accounts, false)
 }
 
+func (s *ConcurrencyService) GetActiveAccountLoadMap(ctx context.Context) (map[int64]*AccountLoadInfo, error) {
+	if s == nil || s.cache == nil {
+		return map[int64]*AccountLoadInfo{}, nil
+	}
+	ttl := time.Duration(s.accountLoadCacheTTL.Load())
+	if ttl <= 0 {
+		return s.fetchActiveAccountLoadMap(ctx)
+	}
+
+	if cached, ok := s.getCachedAccountLoadBatch(activeAccountLoadMapCacheKey, time.Now()); ok {
+		return cloneAccountLoadMap(cached), nil
+	}
+
+	value, err, _ := s.accountLoadGroup.Do(activeAccountLoadMapCacheKey, func() (any, error) {
+		now := time.Now()
+		if cached, ok := s.getCachedAccountLoadBatch(activeAccountLoadMapCacheKey, now); ok {
+			return cloneAccountLoadMap(cached), nil
+		}
+		loadMap, fetchErr := s.fetchActiveAccountLoadMap(ctx)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+		cached := cloneAccountLoadMap(loadMap)
+		s.storeCachedAccountLoadBatch(activeAccountLoadMapCacheKey, cached, now.Add(ttl))
+		return cloneAccountLoadMap(cached), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	loadMap, _ := value.(map[int64]*AccountLoadInfo)
+	if loadMap == nil {
+		return map[int64]*AccountLoadInfo{}, nil
+	}
+	return loadMap, nil
+}
+
 func (s *ConcurrencyService) getAccountsLoadBatch(ctx context.Context, accounts []AccountWithConcurrency, allowCache bool) (map[int64]*AccountLoadInfo, error) {
 	if len(accounts) == 0 {
 		return map[int64]*AccountLoadInfo{}, nil
@@ -462,6 +501,19 @@ func (s *ConcurrencyService) fetchAccountsLoadBatch(ctx context.Context, account
 	redisCtx, cancel := context.WithTimeout(baseCtx, accountLoadBatchFetchTimeout)
 	defer cancel()
 	return s.cache.GetAccountsLoadBatch(redisCtx, accounts)
+}
+
+func (s *ConcurrencyService) fetchActiveAccountLoadMap(ctx context.Context) (map[int64]*AccountLoadInfo, error) {
+	if s == nil || s.cache == nil {
+		return map[int64]*AccountLoadInfo{}, nil
+	}
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	redisCtx, cancel := context.WithTimeout(baseCtx, accountLoadBatchFetchTimeout)
+	defer cancel()
+	return s.cache.GetActiveAccountLoadMap(redisCtx)
 }
 
 func (s *ConcurrencyService) getCachedAccountLoadBatch(key string, now time.Time) (map[int64]*AccountLoadInfo, bool) {

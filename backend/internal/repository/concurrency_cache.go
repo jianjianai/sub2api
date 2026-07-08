@@ -44,8 +44,9 @@ const (
 	userActiveIndexKey    = "concurrency:user:active_index"    // ZSET member=userID, score=expireAtUnixSeconds
 
 	// 后台清理只按批处理索引候选，避免单次任务占用 Redis 太久。
-	activeIndexCleanupBatchSize  = 1000
-	activeIndexPipelineChunkSize = 500
+	activeIndexCleanupBatchSize    = 1000
+	activeIndexPipelineChunkSize   = 500
+	activeAccountLoadReadChunkSize = 500
 
 	// 一次性迁移 marker：活跃索引机制上线前遗留的等待计数键无法被索引发现，
 	// 且有流量时 TTL 会被不断刷新，必须清扫一次。marker 存在即代表已完成。
@@ -421,6 +422,7 @@ func (c *concurrencyCache) readIndexLoads(ctx context.Context, spec slotIndexSpe
 	for _, member := range members {
 		id, err := strconv.ParseInt(member, 10, 64)
 		if err != nil || id <= 0 {
+			logger.LegacyPrintf("repository.concurrency", "Warning: invalid active index member %q", member)
 			staleMembers = append(staleMembers, member)
 			continue
 		}
@@ -780,6 +782,59 @@ func (c *concurrencyCache) GetAccountsLoadBatch(ctx context.Context, accounts []
 		}
 	}
 
+	return loadMap, nil
+}
+
+func (c *concurrencyCache) GetActiveAccountLoadMap(ctx context.Context) (map[int64]*service.AccountLoadInfo, error) {
+	if c == nil || c.rdb == nil {
+		return map[int64]*service.AccountLoadInfo{}, nil
+	}
+	now, err := c.redisUnixSeconds(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	loadMap := make(map[int64]*service.AccountLoadInfo)
+	staleMembers := make([]string, 0)
+	offset := int64(0)
+	for {
+		// 只读取 active index 中仍未过期的 member；分页期间先不删除，避免 offset 因集合收缩跳号。
+		members, err := c.rdb.ZRangeByScore(ctx, accountActiveIndexKey, &redis.ZRangeBy{
+			Min:    strconv.FormatInt(now, 10),
+			Max:    "+inf",
+			Offset: offset,
+			Count:  activeAccountLoadReadChunkSize,
+		}).Result()
+		if err != nil {
+			return nil, err
+		}
+		if len(members) == 0 {
+			break
+		}
+
+		loads, stale, err := c.readIndexLoads(ctx, accountSlotIndex, members, now)
+		if err != nil {
+			return nil, err
+		}
+		staleMembers = append(staleMembers, stale...)
+		for _, load := range loads {
+			if load.slotCount == 0 && load.waitCount <= 0 {
+				staleMembers = append(staleMembers, load.member)
+				continue
+			}
+			loadMap[load.id] = &service.AccountLoadInfo{
+				AccountID:          load.id,
+				CurrentConcurrency: load.slotCount,
+				WaitingCount:       load.waitCount,
+			}
+		}
+
+		offset += int64(len(members))
+		if len(members) < activeAccountLoadReadChunkSize {
+			break
+		}
+	}
+	c.removeActiveIndexMembers(ctx, accountActiveIndexKey, staleMembers)
 	return loadMap, nil
 }
 

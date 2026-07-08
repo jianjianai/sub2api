@@ -59,6 +59,9 @@ func (c StubConcurrencyCache) GetAccountsLoadBatch(_ context.Context, accounts [
 	}
 	return result, nil
 }
+func (c StubConcurrencyCache) GetActiveAccountLoadMap(_ context.Context) (map[int64]*service.AccountLoadInfo, error) {
+	return map[int64]*service.AccountLoadInfo{}, nil
+}
 func (c StubConcurrencyCache) GetUsersLoadBatch(_ context.Context, users []service.UserWithConcurrency) (map[int64]*service.UserLoadInfo, error) {
 	result := make(map[int64]*service.UserLoadInfo, len(users))
 	for _, u := range users {

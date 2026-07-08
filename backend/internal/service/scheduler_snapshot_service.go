@@ -36,6 +36,7 @@ type SchedulerSnapshotService struct {
 	outboxRepo    SchedulerOutboxRepository
 	accountRepo   AccountRepository
 	groupRepo     GroupRepository
+	scoreService  *SchedulerScoreService
 	cfg           *config.Config
 	stopCh        chan struct{}
 	stopOnce      sync.Once
@@ -65,6 +66,13 @@ func NewSchedulerSnapshotService(
 		stopCh:        make(chan struct{}),
 		fallbackLimit: newFallbackLimiter(maxQPS),
 	}
+}
+
+func (s *SchedulerSnapshotService) SetSchedulerScoreService(scoreService *SchedulerScoreService) {
+	if s == nil {
+		return
+	}
+	s.scoreService = scoreService
 }
 
 func (s *SchedulerSnapshotService) Start() {
@@ -593,6 +601,17 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 	if err := s.cache.SetSnapshot(rebuildCtx, bucket, accounts); err != nil {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild cache failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
+	}
+	if s.scoreService != nil {
+		scoreCtx, scoreCancel := context.WithTimeout(context.Background(), time.Minute)
+		start := time.Now()
+		err := s.scoreService.RebuildBucketScores(scoreCtx, bucket, accounts)
+		scoreCancel()
+		if err != nil {
+			slog.Warn("scheduler_score_rebuild_failed", "bucket", bucket.String(), "reason", reason, "bucket_size", len(accounts), "duration_ms", time.Since(start).Milliseconds(), "error", err)
+		} else {
+			slog.Debug("scheduler_score_rebuild_ok", "bucket", bucket.String(), "reason", reason, "bucket_size", len(accounts), "duration_ms", time.Since(start).Milliseconds())
+		}
 	}
 	slog.Debug("[Scheduler] rebuild ok", "bucket", bucket.String(), "reason", reason, "size", len(accounts))
 	return nil

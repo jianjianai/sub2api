@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import AccountsView from '../AccountsView.vue'
+import zh from '@/i18n/locales/zh'
 
 const {
   listAccounts,
@@ -241,12 +242,18 @@ describe('admin AccountsView scheduler score column', () => {
     }))
   })
 
-  it('still shows a dash when no scheduler score is available', async () => {
+  it('shows a pending placeholder when no scheduler score is available', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     const emptyCell = wrapper.find('[data-test="scheduler-score-3"]')
     expect(emptyCell.exists()).toBe(true)
-    expect(emptyCell.text()).toBe('-')
+    expect(emptyCell.text()).toBe('—')
+  })
+
+  it('describes the real scheduler bucket instead of the current filter', () => {
+    const hint = zh.admin.accounts.schedulerScore.hint
+    expect(hint).toContain('真实调度桶候选账号')
+    expect(hint).not.toContain('当前筛选条件')
   })
 })

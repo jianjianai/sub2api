@@ -27,6 +27,8 @@ type stubConcurrencyCacheForTest struct {
 	waitCountErr         error
 	loadBatch            map[int64]*AccountLoadInfo
 	loadBatchErr         error
+	activeLoadMap        map[int64]*AccountLoadInfo
+	activeLoadMapErr     error
 	usersLoadBatch       map[int64]*UserLoadInfo
 	usersLoadErr         error
 	cleanupErr           error
@@ -39,6 +41,7 @@ type stubConcurrencyCacheForTest struct {
 	releasedAccountIDs       []int64
 	releasedRequestIDs       []string
 	loadBatchCalls           atomic.Int64
+	activeLoadMapCalls       atomic.Int64
 	trackedAPIKeyIDs         []int64
 	trackedAPIKeyRequestIDs  []string
 	releasedAPIKeyIDs        []int64
@@ -115,6 +118,13 @@ func (c *stubConcurrencyCacheForTest) DecrementWaitCount(_ context.Context, _ in
 func (c *stubConcurrencyCacheForTest) GetAccountsLoadBatch(_ context.Context, _ []AccountWithConcurrency) (map[int64]*AccountLoadInfo, error) {
 	c.loadBatchCalls.Add(1)
 	return c.loadBatch, c.loadBatchErr
+}
+func (c *stubConcurrencyCacheForTest) GetActiveAccountLoadMap(_ context.Context) (map[int64]*AccountLoadInfo, error) {
+	c.activeLoadMapCalls.Add(1)
+	if c.activeLoadMap != nil {
+		return c.activeLoadMap, c.activeLoadMapErr
+	}
+	return map[int64]*AccountLoadInfo{}, c.activeLoadMapErr
 }
 func (c *stubConcurrencyCacheForTest) GetUsersLoadBatch(_ context.Context, _ []UserWithConcurrency) (map[int64]*UserLoadInfo, error) {
 	return c.usersLoadBatch, c.usersLoadErr

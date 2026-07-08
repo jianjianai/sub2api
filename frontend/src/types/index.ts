@@ -873,6 +873,9 @@ export interface Account {
     sticky_score?: number
     sticky_score_infinity?: boolean
     sticky_weighted_enabled: boolean
+    rank?: number
+    bucket_size?: number
+    updated_at?: string
   } | null
   scheduler_scores?: AccountSchedulerGroupScore[] | null
   priority: number
@@ -973,6 +976,9 @@ export interface AccountSchedulerGroupScore {
   sticky_score?: number
   sticky_score_infinity?: boolean
   sticky_weighted_enabled: boolean
+  rank?: number
+  bucket_size?: number
+  updated_at?: string
 }
 
 // Account Usage types
