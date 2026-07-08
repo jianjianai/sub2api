@@ -380,6 +380,34 @@ func TestGetAccountsLoadBatchFresh_BypassesShortTTLCache(t *testing.T) {
 	require.Equal(t, int64(2), cache.loadBatchCalls.Load())
 }
 
+func TestGetActiveAccountLoadMap_NilCache(t *testing.T) {
+	svc := &ConcurrencyService{cache: nil}
+
+	result, err := svc.GetActiveAccountLoadMap(context.Background())
+	require.NoError(t, err)
+	require.Empty(t, result)
+}
+
+func TestGetActiveAccountLoadMap_UsesShortTTLCache(t *testing.T) {
+	cache := &stubConcurrencyCacheForTest{
+		activeLoadMap: map[int64]*AccountLoadInfo{
+			1: {AccountID: 1, CurrentConcurrency: 1},
+		},
+	}
+	svc := NewConcurrencyService(cache)
+	svc.SetAccountLoadBatchCacheTTL(time.Second)
+
+	first, err := svc.GetActiveAccountLoadMap(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, first[int64(1)].CurrentConcurrency)
+
+	cache.activeLoadMap[1] = &AccountLoadInfo{AccountID: 1, CurrentConcurrency: 4}
+	second, err := svc.GetActiveAccountLoadMap(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, 1, second[int64(1)].CurrentConcurrency)
+	require.Equal(t, int64(1), cache.activeLoadMapCalls.Load())
+}
+
 func TestIncrementWaitCount_Success(t *testing.T) {
 	cache := &stubConcurrencyCacheForTest{waitAllowed: true}
 	svc := NewConcurrencyService(cache)

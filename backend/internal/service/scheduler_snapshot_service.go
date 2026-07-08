@@ -32,18 +32,19 @@ type batchSeenKey struct {
 }
 
 type SchedulerSnapshotService struct {
-	cache         SchedulerCache
-	outboxRepo    SchedulerOutboxRepository
-	accountRepo   AccountRepository
-	groupRepo     GroupRepository
-	scoreService  *SchedulerScoreService
-	cfg           *config.Config
-	stopCh        chan struct{}
-	stopOnce      sync.Once
-	wg            sync.WaitGroup
-	fallbackLimit *fallbackLimiter
-	lagMu         sync.Mutex
-	lagFailures   int
+	cache          SchedulerCache
+	outboxRepo     SchedulerOutboxRepository
+	accountRepo    AccountRepository
+	groupRepo      GroupRepository
+	scoreService   *SchedulerScoreService
+	candidateIndex SchedulerCandidateIndexReadModel
+	cfg            *config.Config
+	stopCh         chan struct{}
+	stopOnce       sync.Once
+	wg             sync.WaitGroup
+	fallbackLimit  *fallbackLimiter
+	lagMu          sync.Mutex
+	lagFailures    int
 }
 
 func NewSchedulerSnapshotService(
@@ -73,6 +74,13 @@ func (s *SchedulerSnapshotService) SetSchedulerScoreService(scoreService *Schedu
 		return
 	}
 	s.scoreService = scoreService
+}
+
+func (s *SchedulerSnapshotService) SetSchedulerCandidateIndex(candidateIndex SchedulerCandidateIndexReadModel) {
+	if s == nil {
+		return
+	}
+	s.candidateIndex = candidateIndex
 }
 
 func (s *SchedulerSnapshotService) Start() {
@@ -613,6 +621,18 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 			slog.Debug("scheduler_score_rebuild_ok", "bucket", bucket.String(), "reason", reason, "bucket_size", len(accounts), "duration_ms", time.Since(start).Milliseconds())
 		}
 	}
+	if s.candidateIndex != nil && s.schedulerCandidateIndexRebuildEnabled() {
+		// 候选索引服务真实调度热路径。写失败只影响 index 命中率，不能阻断快照重建。
+		if bucket.Platform != PlatformOpenAI || bucket.Mode != SchedulerModeSingle {
+			if err := s.candidateIndex.DeleteBucket(rebuildCtx, bucket); err != nil {
+				slog.Warn("scheduler_candidate_index_delete_failed", "bucket", bucket.String(), "reason", reason, "error", err)
+			}
+		} else if version, err := s.candidateIndex.NextVersion(rebuildCtx, bucket); err != nil {
+			slog.Warn("scheduler_candidate_index_next_version_failed", "bucket", bucket.String(), "reason", reason, "error", err)
+		} else if err := s.candidateIndex.SetBucketCandidates(rebuildCtx, bucket, accounts, version, time.Now().UTC()); err != nil {
+			slog.Warn("scheduler_candidate_index_rebuild_failed", "bucket", bucket.String(), "reason", reason, "error", err)
+		}
+	}
 	slog.Debug("[Scheduler] rebuild ok", "bucket", bucket.String(), "reason", reason, "size", len(accounts))
 	return nil
 }
@@ -810,6 +830,10 @@ func (s *SchedulerSnapshotService) withFallbackTimeout(ctx context.Context) (con
 
 func (s *SchedulerSnapshotService) isRunModeSimple() bool {
 	return s.cfg != nil && s.cfg.RunMode == config.RunModeSimple
+}
+
+func (s *SchedulerSnapshotService) schedulerCandidateIndexRebuildEnabled() bool {
+	return s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIScheduler.SelectorCandidateIndexRebuildEnabled
 }
 
 func (s *SchedulerSnapshotService) outboxPollInterval() time.Duration {

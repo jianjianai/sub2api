@@ -275,10 +275,12 @@ func ProvideSchedulerSnapshotService(
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
 	scoreService *SchedulerScoreService,
+	candidateIndex SchedulerCandidateIndexReadModel,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
 	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
 	svc.SetSchedulerScoreService(scoreService)
+	svc.SetSchedulerCandidateIndex(candidateIndex)
 	svc.Start()
 	return svc
 }

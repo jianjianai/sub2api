@@ -2096,6 +2096,10 @@ func (m *mockConcurrencyCache) GetAccountsLoadBatch(ctx context.Context, account
 	return result, nil
 }
 
+func (m *mockConcurrencyCache) GetActiveAccountLoadMap(ctx context.Context) (map[int64]*AccountLoadInfo, error) {
+	return map[int64]*AccountLoadInfo{}, nil
+}
+
 func (m *mockConcurrencyCache) CleanupExpiredAccountSlots(ctx context.Context, accountID int64) error {
 	return nil
 }

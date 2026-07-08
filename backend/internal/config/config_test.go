@@ -1776,6 +1776,26 @@ func TestValidateConfig_OpenAIWSRules(t *testing.T) {
 			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 1.1 },
 			wantErr: "gateway.openai_scheduler.sticky_escape_error_rate",
 		},
+		{
+			name:    "selector_fresh_retry_window 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.SelectorFreshRetryWindow = 0 },
+			wantErr: "gateway.openai_scheduler.selector_fresh_retry_window",
+		},
+		{
+			name:    "selector_candidate_page_size 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.SelectorCandidatePageSize = 0 },
+			wantErr: "gateway.openai_scheduler.selector_candidate_page_size",
+		},
+		{
+			name:    "selector_max_scan 必须为正数",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.SelectorMaxScan = 0 },
+			wantErr: "gateway.openai_scheduler.selector_max_scan",
+		},
+		{
+			name:    "selector_shadow_sample_rate 不能大于 1",
+			mutate:  func(c *Config) { c.Gateway.OpenAIScheduler.SelectorShadowSampleRate = 1.1 },
+			wantErr: "gateway.openai_scheduler.selector_shadow_sample_rate",
+		},
 	}
 
 	for _, tc := range cases {

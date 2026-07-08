@@ -1033,6 +1033,24 @@ type GatewayOpenAISchedulerConfig struct {
 	StickyEscapeTTFTMs int `mapstructure:"sticky_escape_ttft_ms"`
 	// StickyEscapeErrorRate: 错误率 EWMA 超过该阈值时跳过 sticky
 	StickyEscapeErrorRate float64 `mapstructure:"sticky_escape_error_rate"`
+	// SelectorActiveLoadMapEnabled: 首轮选号是否使用活跃账号负载快照，避免对全候选池逐账号读 Redis。
+	SelectorActiveLoadMapEnabled bool `mapstructure:"selector_active_load_map_enabled"`
+	// SelectorFreshRetryWindow: active load map 模式下，抢槽失败后只实时刷新前 N 个候选。
+	SelectorFreshRetryWindow int `mapstructure:"selector_fresh_retry_window"`
+	// SelectorCandidateIndexRebuildEnabled: 是否在调度快照重建后写入候选索引。
+	SelectorCandidateIndexRebuildEnabled bool `mapstructure:"selector_candidate_index_rebuild_enabled"`
+	// SelectorIndexEnabled: 是否让真实选号使用候选索引路径。
+	SelectorIndexEnabled bool `mapstructure:"selector_index_enabled"`
+	// SelectorCandidatePageSize: indexed selector 每页读取候选数。
+	SelectorCandidatePageSize int `mapstructure:"selector_candidate_page_size"`
+	// SelectorMaxScan: indexed selector 单次请求最多扫描候选数。
+	SelectorMaxScan int `mapstructure:"selector_max_scan"`
+	// SelectorFallbackToLegacyEnabled: index 缺失或扫描超限时是否回退 legacy。
+	SelectorFallbackToLegacyEnabled bool `mapstructure:"selector_fallback_to_legacy_enabled"`
+	// SelectorShadowCompareEnabled: 是否运行 indexed selector shadow compare。
+	SelectorShadowCompareEnabled bool `mapstructure:"selector_shadow_compare_enabled"`
+	// SelectorShadowSampleRate: shadow compare 采样率，范围 0-1。
+	SelectorShadowSampleRate float64 `mapstructure:"selector_shadow_sample_rate"`
 }
 
 // GatewayUsageRecordConfig 使用量记录异步队列配置
@@ -1473,6 +1491,18 @@ func load(allowMissingJWTSecret bool) (*Config, error) {
 	}
 	if cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate == 0 {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeErrorRate = 0.5
+	}
+	if cfg.Gateway.OpenAIScheduler.SelectorFreshRetryWindow == 0 {
+		cfg.Gateway.OpenAIScheduler.SelectorFreshRetryWindow = 64
+	}
+	if cfg.Gateway.OpenAIScheduler.SelectorCandidatePageSize == 0 {
+		cfg.Gateway.OpenAIScheduler.SelectorCandidatePageSize = 256
+	}
+	if cfg.Gateway.OpenAIScheduler.SelectorMaxScan == 0 {
+		cfg.Gateway.OpenAIScheduler.SelectorMaxScan = 2000
+	}
+	if !cfg.Gateway.OpenAIScheduler.SelectorFallbackToLegacyEnabled && !viper.IsSet("gateway.openai_scheduler.selector_fallback_to_legacy_enabled") {
+		cfg.Gateway.OpenAIScheduler.SelectorFallbackToLegacyEnabled = true
 	}
 	if !cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled && !viper.IsSet("gateway.openai_scheduler.sticky_escape_enabled") {
 		cfg.Gateway.OpenAIScheduler.StickyEscapeEnabled = true
@@ -1994,6 +2024,15 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.quota_headroom", 0.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.previous_response", 5.0)
 	viper.SetDefault("gateway.openai_ws.scheduler_score_weights.session_sticky", 3.0)
+	viper.SetDefault("gateway.openai_scheduler.selector_active_load_map_enabled", false)
+	viper.SetDefault("gateway.openai_scheduler.selector_fresh_retry_window", 64)
+	viper.SetDefault("gateway.openai_scheduler.selector_candidate_index_rebuild_enabled", false)
+	viper.SetDefault("gateway.openai_scheduler.selector_index_enabled", false)
+	viper.SetDefault("gateway.openai_scheduler.selector_candidate_page_size", 256)
+	viper.SetDefault("gateway.openai_scheduler.selector_max_scan", 2000)
+	viper.SetDefault("gateway.openai_scheduler.selector_fallback_to_legacy_enabled", true)
+	viper.SetDefault("gateway.openai_scheduler.selector_shadow_compare_enabled", false)
+	viper.SetDefault("gateway.openai_scheduler.selector_shadow_sample_rate", 0.0)
 	// OpenAI HTTP upstream protocol strategy
 	viper.SetDefault("gateway.openai_http2.enabled", true)
 	viper.SetDefault("gateway.openai_http2.allow_proxy_fallback_to_http1", true)
@@ -2851,6 +2890,18 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OpenAIScheduler.StickyEscapeErrorRate < 0 || c.Gateway.OpenAIScheduler.StickyEscapeErrorRate > 1 {
 		return fmt.Errorf("gateway.openai_scheduler.sticky_escape_error_rate must be between 0 and 1")
+	}
+	if c.Gateway.OpenAIScheduler.SelectorFreshRetryWindow <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.selector_fresh_retry_window must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.SelectorCandidatePageSize <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.selector_candidate_page_size must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.SelectorMaxScan <= 0 {
+		return fmt.Errorf("gateway.openai_scheduler.selector_max_scan must be positive")
+	}
+	if c.Gateway.OpenAIScheduler.SelectorShadowSampleRate < 0 || c.Gateway.OpenAIScheduler.SelectorShadowSampleRate > 1 {
+		return fmt.Errorf("gateway.openai_scheduler.selector_shadow_sample_rate must be between 0 and 1")
 	}
 	if c.Gateway.MaxLineSize < 0 {
 		return fmt.Errorf("gateway.max_line_size must be non-negative")

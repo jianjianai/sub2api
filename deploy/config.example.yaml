@@ -338,6 +338,24 @@ gateway:
     sticky_escape_ttft_ms: 15000
     # 错误率 EWMA 超过该阈值时跳过 sticky，默认 0.5，仅在明显降级时触发
     sticky_escape_error_rate: 0.5
+    # 首轮选号是否使用活跃账号负载快照；默认关闭，灰度开启后可减少全候选池 Redis 负载读取
+    selector_active_load_map_enabled: false
+    # active load map 模式下，抢槽失败后只实时刷新前 N 个候选，避免再次全量读取
+    selector_fresh_retry_window: 64
+    # 是否在调度快照重建后写入候选索引；建议先开启重建，再开启 shadow compare
+    selector_candidate_index_rebuild_enabled: false
+    # 是否让真实选号使用候选索引；默认关闭，需完成 shadow compare 观察后灰度
+    selector_index_enabled: false
+    # indexed selector 每页读取候选数
+    selector_candidate_page_size: 256
+    # indexed selector 单次请求最多扫描候选数，超过后按配置回退 legacy
+    selector_max_scan: 2000
+    # index 缺失或扫描超限时是否回退 legacy
+    selector_fallback_to_legacy_enabled: true
+    # 是否运行 indexed selector shadow compare；shadow 不抢槽、不影响真实结果
+    selector_shadow_compare_enabled: false
+    # shadow compare 采样率，范围 0-1
+    selector_shadow_sample_rate: 0.0
   # OpenAI HTTP upstream protocol strategy.
   # OpenAI HTTP 上游协议策略（默认 HTTP/2；代理明确不兼容时可临时回退 HTTP/1.1）。
   openai_http2:
