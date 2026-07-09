@@ -1048,6 +1048,14 @@ func (s *stubSchedulerCache) SetAccount(ctx context.Context, account *Account) e
 	return s.setAccountErr
 }
 
+func (s *stubSchedulerCache) SetCandidateIndex(ctx context.Context, bucket SchedulerBucket, accounts []Account) error {
+	return nil
+}
+
+func (s *stubSchedulerCache) DeleteOldSnapshots(ctx context.Context, buckets []SchedulerBucket) error {
+	return nil
+}
+
 // TestUpdateAccountModelRateLimitInCache_UpdatesExtraAndCallsCache 测试模型限流后更新缓存
 func TestUpdateAccountModelRateLimitInCache_UpdatesExtraAndCallsCache(t *testing.T) {
 	cache := &stubSchedulerCache{}

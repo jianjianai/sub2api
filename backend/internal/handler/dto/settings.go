@@ -231,6 +231,12 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightQuotaHeadroom    string `json:"openai_advanced_scheduler_effective_weight_quota_headroom"`
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string `json:"openai_advanced_scheduler_effective_weight_previous_response"`
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string `json:"openai_advanced_scheduler_effective_weight_session_sticky"`
+	SchedulerCandidateIndexEnabled                         bool   `json:"scheduler_candidate_index_enabled"`
+	SchedulerCandidateIndexStatus                          string `json:"scheduler_candidate_index_status"`
+	SchedulerCandidateIndexError                           string `json:"scheduler_candidate_index_error"`
+	SchedulerCandidateFetchLimit                           int    `json:"scheduler_candidate_fetch_limit"`
+	SchedulerCandidateReadyWaitMS                          int    `json:"scheduler_candidate_ready_wait_ms"`
+	SchedulerCandidateBuildWaitMS                          int    `json:"scheduler_candidate_build_wait_ms"`
 
 	// Payment configuration
 	PaymentEnabled                   bool     `json:"payment_enabled"`

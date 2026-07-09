@@ -168,6 +168,23 @@ vi.mock("vue-i18n", async () => {
     "admin.settings.openaiExperimentalScheduler.weightsTitle": "调度权值覆盖",
     "admin.settings.openaiExperimentalScheduler.weightsDescription": "留空时使用配置/环境变量值；配置未设置时使用内置默认值。页面非空设置优先。",
     "admin.settings.openaiExperimentalScheduler.defaultPlaceholder": "配置/默认：{value}",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexTitle": "智能候选路由引擎",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexDescription": "开启后 OpenAI/Grok 选号从全量快照扫描切换为 Redis 小候选池读取。",
+    "admin.settings.openaiExperimentalScheduler.candidateConfigTitle": "智能候选路由配置",
+    "admin.settings.openaiExperimentalScheduler.candidateConfigDescription": "只配置会影响线上请求路径的运行时参数；保存后开关状态仍以右侧状态标签为准。",
+    "admin.settings.openaiExperimentalScheduler.candidateFetchLimitLabel": "候选池读取量",
+    "admin.settings.openaiExperimentalScheduler.candidateFetchLimitDescription": "每次请求最多从 Redis 候选集合读取的账号数。",
+    "admin.settings.openaiExperimentalScheduler.candidateFetchLimitRecommendation": "推荐：少于 30 个账号填 16-32；30-200 个填 64；200-1000 个填 96-128；超过 1000 个填 128-256。最低 8。",
+    "admin.settings.openaiExperimentalScheduler.candidateReadyWaitLabel": "ready 传播等待（ms）",
+    "admin.settings.openaiExperimentalScheduler.candidateReadyWaitDescription": "等待刚写入的 ready 标记在 Redis/多实例间可见。",
+    "admin.settings.openaiExperimentalScheduler.candidateReadyWaitRecommendation": "推荐：单机或低延迟 Redis 填 100-200；跨机房或 Redis 延迟偏高填 300-500。",
+    "admin.settings.openaiExperimentalScheduler.candidateBuildWaitLabel": "缺索引构建等待（ms）",
+    "admin.settings.openaiExperimentalScheduler.candidateBuildWaitDescription": "启动恢复或 bucket 缺失时，新请求最多等待定向索引构建完成的时间。",
+    "admin.settings.openaiExperimentalScheduler.candidateBuildWaitRecommendation": "推荐：小号池填 3000-5000；中号池填 5000-10000；大号池填 10000-20000。",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexDisabled": "未启用",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexBuilding": "切换中",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexActive": "已启用",
+    "admin.settings.openaiExperimentalScheduler.candidateIndexFailed": "失败",
     "admin.settings.openaiExperimentalScheduler.topKLabel": "TopK",
     "admin.settings.openaiExperimentalScheduler.priorityWeight": "优先级",
     "admin.settings.openaiExperimentalScheduler.loadWeight": "负载",
@@ -441,6 +458,12 @@ const baseSettingsResponse = {
   openai_advanced_scheduler_weight_quota_headroom: "",
   openai_advanced_scheduler_weight_previous_response: "",
   openai_advanced_scheduler_weight_session_sticky: "",
+  scheduler_candidate_index_enabled: false,
+  scheduler_candidate_index_status: "disabled",
+  scheduler_candidate_index_error: "",
+  scheduler_candidate_fetch_limit: 64,
+  scheduler_candidate_ready_wait_ms: 200,
+  scheduler_candidate_build_wait_ms: 5000,
   openai_advanced_scheduler_effective_lb_top_k: "7",
   openai_advanced_scheduler_effective_weight_priority: "1",
   openai_advanced_scheduler_effective_weight_load: "1",
@@ -814,7 +837,42 @@ describe("admin SettingsView payment visible method controls", () => {
     expect(wrapper.text()).toContain(
       "默认关闭。开启后仅影响本网关在 OpenAI 账号间的实验性调度选择逻辑",
     );
+    expect(wrapper.text()).toContain("智能候选路由引擎");
+    expect(wrapper.text()).toContain("Redis 小候选池读取");
+    expect(wrapper.text()).toContain("未启用");
     expect(wrapper.text()).not.toContain("OpenAI 高级调度器");
+  });
+
+  it("renders candidate engine config and submits runtime settings", async () => {
+    getSettings.mockResolvedValueOnce({
+      ...baseSettingsResponse,
+      scheduler_candidate_index_enabled: true,
+      scheduler_candidate_index_status: "building",
+      scheduler_candidate_index_error: "",
+      scheduler_candidate_fetch_limit: 96,
+      scheduler_candidate_ready_wait_ms: 300,
+      scheduler_candidate_build_wait_ms: 9000,
+    });
+    const wrapper = mountView();
+
+    await flushPromises();
+
+    expect(wrapper.text()).toContain("切换中");
+    expect(wrapper.text()).toContain("智能候选路由配置");
+    expect(wrapper.text()).toContain("候选池读取量");
+    expect(wrapper.text()).toContain("30-200 个填 64");
+
+    await wrapper.find("form").trigger("submit.prevent");
+    await flushPromises();
+
+    expect(updateSettings).toHaveBeenCalledWith(
+      expect.objectContaining({
+        scheduler_candidate_index_enabled: true,
+        scheduler_candidate_fetch_limit: 96,
+        scheduler_candidate_ready_wait_ms: 300,
+        scheduler_candidate_build_wait_ms: 9000,
+      }),
+    );
   });
 
   it("passes translated upload and remove labels to the payment help image uploader", async () => {

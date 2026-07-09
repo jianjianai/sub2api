@@ -22,6 +22,14 @@ func (c *outboxCleanupCache) SetSnapshot(ctx context.Context, bucket SchedulerBu
 	return nil
 }
 
+func (c *outboxCleanupCache) SetCandidateIndex(ctx context.Context, bucket SchedulerBucket, accounts []Account) error {
+	return nil
+}
+
+func (c *outboxCleanupCache) DeleteOldSnapshots(ctx context.Context, buckets []SchedulerBucket) error {
+	return nil
+}
+
 func (c *outboxCleanupCache) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
 	return nil, nil
 }
@@ -36,6 +44,34 @@ func (c *outboxCleanupCache) DeleteAccount(ctx context.Context, accountID int64)
 
 func (c *outboxCleanupCache) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
 	return c.updateErr
+}
+
+func (c *outboxCleanupCache) ListCandidateAccounts(ctx context.Context, bucket SchedulerBucket, opts SchedulerCandidateListOptions) ([]*Account, bool, error) {
+	return nil, false, nil
+}
+
+func (c *outboxCleanupCache) RemoveAccountFromCandidates(ctx context.Context, accountID int64, state SchedulerBlockedAccountState) ([]SchedulerBucket, error) {
+	return nil, nil
+}
+
+func (c *outboxCleanupCache) RestoreAccountCandidates(ctx context.Context, account *Account, buckets []SchedulerBucket) error {
+	return nil
+}
+
+func (c *outboxCleanupCache) UpdateCandidateScores(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+
+func (c *outboxCleanupCache) PopDueBlockedAccounts(ctx context.Context, now time.Time, limit int) ([]int64, error) {
+	return nil, nil
+}
+
+func (c *outboxCleanupCache) AckBlockedAccount(ctx context.Context, accountID int64) error {
+	return nil
+}
+
+func (c *outboxCleanupCache) RequeueBlockedAccount(ctx context.Context, accountID int64, until time.Time, reason string) error {
+	return nil
 }
 
 func (c *outboxCleanupCache) TryLockBucket(ctx context.Context, bucket SchedulerBucket, ttl time.Duration) (bool, error) {

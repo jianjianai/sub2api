@@ -155,6 +155,13 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
+				if status, errType, message, retryAfter, ok := classifySchedulerCacheError(err); ok {
+					if retryAfter != "" {
+						c.Header("Retry-After", retryAfter)
+					}
+					h.handleStreamingAwareError(c, status, errType, message, streamStarted)
+					return
+				}
 				cls := classifyNoAccountErrorFromGin(c, h.gatewayService, apiKey, reqModel, reqModel, service.PlatformOpenAI)
 				if !cls.ModelNotFound {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)

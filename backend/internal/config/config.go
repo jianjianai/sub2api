@@ -1133,6 +1133,20 @@ type GatewaySchedulingConfig struct {
 	SnapshotMGetChunkSize int `mapstructure:"snapshot_mget_chunk_size"`
 	// 快照重建时的缓存写入分块大小
 	SnapshotWriteChunkSize int `mapstructure:"snapshot_write_chunk_size"`
+	// 候选索引读取开关。默认关闭，开启后调度热路径优先读取小批量候选索引。
+	CandidateIndexEnabled bool `mapstructure:"candidate_index_enabled"`
+	// 候选索引单次读取上限。
+	CandidateFetchLimit int `mapstructure:"candidate_fetch_limit"`
+	// 小 bucket 阈值，预留给小池全量候选读取策略。
+	CandidateSmallBucketThreshold int `mapstructure:"candidate_small_bucket_threshold"`
+	// blocked 恢复 worker 单批处理数量。
+	CandidateRestoreBatchSize int `mapstructure:"candidate_restore_batch_size"`
+	// blocked 恢复 worker 轮询间隔（毫秒）。
+	CandidateRestoreIntervalMS int `mapstructure:"candidate_restore_interval_ms"`
+	// candidate ready 状态短暂传播等待（毫秒）。
+	CandidateReadyWaitMS int `mapstructure:"candidate_ready_wait_ms"`
+	// candidate 索引缺失时请求等待构建的上限（毫秒）。
+	CandidateBuildWaitMS int `mapstructure:"candidate_build_wait_ms"`
 
 	// 过期槽位清理周期（0 表示禁用）
 	SlotCleanupInterval time.Duration `mapstructure:"slot_cleanup_interval"`
@@ -2035,6 +2049,13 @@ func setDefaults() {
 	viper.SetDefault("gateway.scheduling.load_batch_cache_ttl_ms", 200)
 	viper.SetDefault("gateway.scheduling.snapshot_mget_chunk_size", 128)
 	viper.SetDefault("gateway.scheduling.snapshot_write_chunk_size", 256)
+	viper.SetDefault("gateway.scheduling.candidate_index_enabled", false)
+	viper.SetDefault("gateway.scheduling.candidate_fetch_limit", 64)
+	viper.SetDefault("gateway.scheduling.candidate_small_bucket_threshold", 32)
+	viper.SetDefault("gateway.scheduling.candidate_restore_batch_size", 100)
+	viper.SetDefault("gateway.scheduling.candidate_restore_interval_ms", 1000)
+	viper.SetDefault("gateway.scheduling.candidate_ready_wait_ms", 200)
+	viper.SetDefault("gateway.scheduling.candidate_build_wait_ms", 5000)
 	viper.SetDefault("gateway.scheduling.slot_cleanup_interval", 30*time.Second)
 	viper.SetDefault("gateway.scheduling.db_fallback_enabled", true)
 	viper.SetDefault("gateway.scheduling.db_fallback_timeout_seconds", 0)
@@ -2942,6 +2963,24 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Scheduling.SnapshotWriteChunkSize <= 0 {
 		return fmt.Errorf("gateway.scheduling.snapshot_write_chunk_size must be positive")
+	}
+	if c.Gateway.Scheduling.CandidateFetchLimit < 8 {
+		return fmt.Errorf("gateway.scheduling.candidate_fetch_limit must be >= 8")
+	}
+	if c.Gateway.Scheduling.CandidateSmallBucketThreshold < 0 {
+		return fmt.Errorf("gateway.scheduling.candidate_small_bucket_threshold must be non-negative")
+	}
+	if c.Gateway.Scheduling.CandidateRestoreBatchSize <= 0 {
+		return fmt.Errorf("gateway.scheduling.candidate_restore_batch_size must be positive")
+	}
+	if c.Gateway.Scheduling.CandidateRestoreIntervalMS <= 0 {
+		return fmt.Errorf("gateway.scheduling.candidate_restore_interval_ms must be positive")
+	}
+	if c.Gateway.Scheduling.CandidateReadyWaitMS <= 0 {
+		return fmt.Errorf("gateway.scheduling.candidate_ready_wait_ms must be positive")
+	}
+	if c.Gateway.Scheduling.CandidateBuildWaitMS <= 0 {
+		return fmt.Errorf("gateway.scheduling.candidate_build_wait_ms must be positive")
 	}
 	if c.Gateway.Scheduling.SlotCleanupInterval < 0 {
 		return fmt.Errorf("gateway.scheduling.slot_cleanup_interval must be non-negative")

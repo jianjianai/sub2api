@@ -476,6 +476,18 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.OpenAIAdvancedSchedulerWeightSessionSticky != after.OpenAIAdvancedSchedulerWeightSessionSticky {
 		changed = append(changed, "openai_advanced_scheduler_weight_session_sticky")
 	}
+	if before.SchedulerCandidateIndexEnabled != after.SchedulerCandidateIndexEnabled {
+		changed = append(changed, "scheduler_candidate_index_enabled")
+	}
+	if before.SchedulerCandidateFetchLimit != after.SchedulerCandidateFetchLimit {
+		changed = append(changed, "scheduler_candidate_fetch_limit")
+	}
+	if before.SchedulerCandidateReadyWaitMS != after.SchedulerCandidateReadyWaitMS {
+		changed = append(changed, "scheduler_candidate_ready_wait_ms")
+	}
+	if before.SchedulerCandidateBuildWaitMS != after.SchedulerCandidateBuildWaitMS {
+		changed = append(changed, "scheduler_candidate_build_wait_ms")
+	}
 	// 余额、订阅到期与账号限额通知
 	if before.BalanceLowNotifyEnabled != after.BalanceLowNotifyEnabled {
 		changed = append(changed, "balance_low_notify_enabled")

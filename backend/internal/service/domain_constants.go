@@ -445,6 +445,12 @@ const (
 	SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom         = "openai_advanced_scheduler_weight_quota_headroom"
 	SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse      = "openai_advanced_scheduler_weight_previous_response"
 	SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky         = "openai_advanced_scheduler_weight_session_sticky"
+	SettingKeySchedulerCandidateIndexEnabled                     = "scheduler_candidate_index_enabled"
+	SettingKeySchedulerCandidateIndexStatus                      = "scheduler_candidate_index_status"
+	SettingKeySchedulerCandidateIndexError                       = "scheduler_candidate_index_error"
+	SettingKeySchedulerCandidateFetchLimit                       = "scheduler_candidate_fetch_limit"
+	SettingKeySchedulerCandidateReadyWaitMS                      = "scheduler_candidate_ready_wait_ms"
+	SettingKeySchedulerCandidateBuildWaitMS                      = "scheduler_candidate_build_wait_ms"
 
 	// SettingKeyBackendModeEnabled Backend 模式：禁用用户注册和自助服务，仅管理员可登录
 	SettingKeyBackendModeEnabled = "backend_mode_enabled"

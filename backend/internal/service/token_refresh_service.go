@@ -318,6 +318,8 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 					"account_id", account.ID,
 					"error", setErr,
 				)
+			} else {
+				notifyCandidateIndexBlocked(ctx, s.runtimeBlocker, account, time.Time{}, "token_refresh_non_retryable", "token_refresh_service")
 			}
 			return err
 		}
@@ -359,6 +361,7 @@ func (s *TokenRefreshService) refreshWithRetry(ctx context.Context, account *Acc
 			"error", setErr,
 		)
 	} else {
+		notifyCandidateIndexBlocked(ctx, s.runtimeBlocker, account, until, "token_refresh_retry_exhausted", "token_refresh_service")
 		slog.Info("token_refresh.temp_unschedulable_set",
 			"account_id", account.ID,
 			"until", until.Format(time.RFC3339),
@@ -384,6 +387,7 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 		} else {
 			slog.Info("token_refresh.cleared_missing_project_id_error", "account_id", account.ID)
 			s.notifyAccountSchedulingBlockCleared(account.ID)
+			notifyCandidateIndexRestored(ctx, s.runtimeBlocker, account.ID, "token_refresh_clear_error")
 		}
 	}
 	// 刷新成功后清除临时不可调度状态（处理 OAuth 401 恢复场景）
@@ -395,7 +399,10 @@ func (s *TokenRefreshService) postRefreshActions(ctx context.Context, account *A
 			)
 		} else {
 			slog.Info("token_refresh.cleared_temp_unschedulable", "account_id", account.ID)
+			account.TempUnschedulableUntil = nil
+			account.TempUnschedulableReason = ""
 			s.notifyAccountSchedulingBlockCleared(account.ID)
+			notifyCandidateIndexRestored(ctx, s.runtimeBlocker, account.ID, "token_refresh_success")
 		}
 		// 同步清除 Redis 缓存，避免调度器读到过期的临时不可调度状态
 		if s.tempUnschedCache != nil {

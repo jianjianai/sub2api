@@ -398,6 +398,37 @@ func TestSettingService_UpdateSettings_APIKeyACLTrustForwardedIPRefreshesConfig(
 	require.True(t, cfg.TrustForwardedIPForAPIKeyACL())
 }
 
+func TestSettingService_UpdateSettings_SchedulerCandidateRuntimeSettings(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	cfg := &config.Config{}
+	svc := NewSettingService(repo, cfg)
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		SchedulerCandidateFetchLimit:  96,
+		SchedulerCandidateReadyWaitMS: 300,
+		SchedulerCandidateBuildWaitMS: 9000,
+	})
+	require.NoError(t, err)
+	require.Equal(t, "96", repo.updates[SettingKeySchedulerCandidateFetchLimit])
+	require.Equal(t, "300", repo.updates[SettingKeySchedulerCandidateReadyWaitMS])
+	require.Equal(t, "9000", repo.updates[SettingKeySchedulerCandidateBuildWaitMS])
+	require.Equal(t, 96, cfg.Gateway.Scheduling.CandidateFetchLimit)
+	require.Equal(t, 300, cfg.Gateway.Scheduling.CandidateReadyWaitMS)
+	require.Equal(t, 9000, cfg.Gateway.Scheduling.CandidateBuildWaitMS)
+}
+
+func TestSettingService_UpdateSettings_RejectsInvalidSchedulerCandidateFetchLimit(t *testing.T) {
+	repo := &settingUpdateRepoStub{}
+	svc := NewSettingService(repo, &config.Config{})
+
+	err := svc.UpdateSettings(context.Background(), &SystemSettings{
+		SchedulerCandidateFetchLimit: 4,
+	})
+	require.Error(t, err)
+	require.Equal(t, "INVALID_SCHEDULER_CANDIDATE_FETCH_LIMIT", infraerrors.Reason(err))
+	require.Nil(t, repo.updates)
+}
+
 func TestSettingService_ParseSettings_APIKeyACLTrustForwardedIPFallsBackToConfigWhenMissing(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Security.TrustForwardedIPForAPIKeyACL = true

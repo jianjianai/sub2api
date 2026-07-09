@@ -1256,11 +1256,15 @@ func (s *OpenAIGatewayService) schedulingConfig() config.GatewaySchedulingConfig
 		return s.cfg.Gateway.Scheduling
 	}
 	return config.GatewaySchedulingConfig{
-		StickySessionMaxWaiting:  3,
-		StickySessionWaitTimeout: 45 * time.Second,
-		FallbackWaitTimeout:      30 * time.Second,
-		FallbackMaxWaiting:       100,
-		LoadBatchEnabled:         true,
-		SlotCleanupInterval:      30 * time.Second,
+		StickySessionMaxWaiting:       3,
+		StickySessionWaitTimeout:      45 * time.Second,
+		FallbackWaitTimeout:           30 * time.Second,
+		FallbackMaxWaiting:            100,
+		LoadBatchEnabled:              true,
+		CandidateFetchLimit:           DefaultSchedulerCandidateFetchLimit,
+		CandidateSmallBucketThreshold: 32,
+		CandidateRestoreBatchSize:     DefaultSchedulerCandidateRestoreBatch,
+		CandidateRestoreIntervalMS:    DefaultSchedulerCandidateRestoreDelayMS,
+		SlotCleanupInterval:           30 * time.Second,
 	}
 }

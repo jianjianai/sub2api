@@ -73,6 +73,9 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	if err := s.normalizeOpenAIAdvancedSchedulerOverrides(settings); err != nil {
 		return nil, err
 	}
+	if err := s.normalizeSchedulerCandidateRuntimeSettings(settings); err != nil {
+		return nil, err
+	}
 	settings.PaymentVisibleMethodAlipaySource = alipaySource
 	settings.PaymentVisibleMethodWxpaySource = wxpaySource
 	settings.WeChatConnectAppID = strings.TrimSpace(settings.WeChatConnectAppID)
@@ -393,6 +396,12 @@ func (s *SettingService) buildSystemSettingsUpdates(ctx context.Context, setting
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom] = settings.OpenAIAdvancedSchedulerWeightQuotaHeadroom
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse] = settings.OpenAIAdvancedSchedulerWeightPreviousResponse
 	updates[SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky] = settings.OpenAIAdvancedSchedulerWeightSessionSticky
+	// scheduler_candidate_index_* 是“目标开关 + 后台切换状态”，由
+	// ApplySchedulerCandidateIndexTarget/UpdateSchedulerCandidateIndexState 独立写入。
+	// 普通设置保存不能覆盖它，否则可能把后台刚写入的 active/failed 状态回滚成旧值。
+	updates[SettingKeySchedulerCandidateFetchLimit] = strconv.Itoa(settings.SchedulerCandidateFetchLimit)
+	updates[SettingKeySchedulerCandidateReadyWaitMS] = strconv.Itoa(settings.SchedulerCandidateReadyWaitMS)
+	updates[SettingKeySchedulerCandidateBuildWaitMS] = strconv.Itoa(settings.SchedulerCandidateBuildWaitMS)
 
 	// 余额、订阅到期与账号限额通知
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
@@ -570,6 +579,10 @@ func (s *SettingService) refreshCachedSettings(settings *SystemSettings) {
 	}
 	if s.cfg != nil {
 		s.cfg.SetTrustForwardedIPForAPIKeyACL(settings.APIKeyACLTrustForwardedIP)
+		// 候选路由引擎的运行时参数不走开关状态写入；普通设置保存后直接刷新到共享 cfg。
+		s.cfg.Gateway.Scheduling.CandidateFetchLimit = settings.SchedulerCandidateFetchLimit
+		s.cfg.Gateway.Scheduling.CandidateReadyWaitMS = settings.SchedulerCandidateReadyWaitMS
+		s.cfg.Gateway.Scheduling.CandidateBuildWaitMS = settings.SchedulerCandidateBuildWaitMS
 	}
 	// codex_cli_only 加固策略缓存：设置更新后强制下次重载（涉及 4 个键 + JSON 解析，直接置过期）。
 	s.codexRestrictionPolicySF.Forget("codex_restriction_policy")

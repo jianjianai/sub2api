@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -12,15 +13,22 @@ import (
 )
 
 const (
-	schedulerBucketSetKey       = "sched:buckets"
-	schedulerOutboxWatermarkKey = "sched:outbox:watermark"
-	schedulerAccountPrefix      = "sched:acc:"
-	schedulerAccountMetaPrefix  = "sched:meta:"
-	schedulerActivePrefix       = "sched:active:"
-	schedulerReadyPrefix        = "sched:ready:"
-	schedulerVersionPrefix      = "sched:ver:"
-	schedulerSnapshotPrefix     = "sched:"
-	schedulerLockPrefix         = "sched:lock:"
+	schedulerBucketSetKey         = "sched:buckets"
+	schedulerOutboxWatermarkKey   = "sched:outbox:watermark"
+	schedulerAccountPrefix        = "sched:acc:"
+	schedulerAccountMetaPrefix    = "sched:meta:"
+	schedulerActivePrefix         = "sched:active:"
+	schedulerReadyPrefix          = "sched:ready:"
+	schedulerVersionPrefix        = "sched:ver:"
+	schedulerSnapshotPrefix       = "sched:"
+	schedulerLockPrefix           = "sched:lock:"
+	schedulerCandidatePrefix      = "sched:cand:"
+	schedulerCandidateReadyPrefix = "sched:cand-ready:"
+	schedulerCandidateCountPrefix = "sched:cand-count:"
+	schedulerAccountBucketsPrefix = "sched:acc-buckets:"
+	schedulerBlockedKey           = "sched:blocked"
+	schedulerBlockPrefix          = "sched:block:"
+	schedulerRestoreLockPrefix    = "sched:restore-lock:"
 
 	defaultSchedulerSnapshotMGetChunkSize  = 128
 	defaultSchedulerSnapshotWriteChunkSize = 256
@@ -66,6 +74,17 @@ if currentActive ~= false and currentActive ~= ARGV[1] then
 end
 
 return 1
+`)
+
+	adjustCandidateCountScript = redis.NewScript(`
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local delta = tonumber(ARGV[1])
+local nextValue = current + delta
+if nextValue < 0 then
+	nextValue = 0
+end
+redis.call('SET', KEYS[1], tostring(nextValue))
+return nextValue
 `)
 )
 
@@ -150,10 +169,9 @@ func (c *schedulerCache) GetSnapshot(ctx context.Context, bucket service.Schedul
 	return accounts, true, nil
 }
 
+// SetSnapshot 是旧调度结构性 rebuild 的入口：保留旧版 versioned snapshot，
+// 同时刷新 candidate index，供未切换或回滚场景保持缓存一致。
 func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
-	// Phase 1: 分配新版本号并写入快照数据。
-	// INCR 保证每个调用方获得唯一递增版本号。
-	// 写入的 snapshotKey 是新的版本化 key，reader 尚不知晓，因此无竞态。
 	versionKey := schedulerBucketKey(schedulerVersionPrefix, bucket)
 	version, err := c.rdb.Incr(ctx, versionKey).Result()
 	if err != nil {
@@ -168,7 +186,6 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	}
 
 	if len(accounts) > 0 {
-		// 使用序号作为 score，保持数据库返回的排序语义。
 		members := make([]redis.Z, 0, len(accounts))
 		for idx, account := range accounts {
 			members = append(members, redis.Z{
@@ -189,10 +206,6 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 		}
 	}
 
-	// Phase 2: 原子 CAS 激活版本。
-	// Lua 脚本保证：仅当新版本 >= 当前激活版本时才切换 active 指针，
-	// 防止并发写入导致版本回滚。
-	// 旧快照使用 EXPIRE 宽限期而非立即 DEL，避免 reader 竞态。
 	activeKey := schedulerBucketKey(schedulerActivePrefix, bucket)
 	readyKey := schedulerBucketKey(schedulerReadyPrefix, bucket)
 	snapshotKeyPrefix := fmt.Sprintf("%s%d:%s:%s:v", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode)
@@ -200,12 +213,451 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	keys := []string{activeKey, readyKey, schedulerBucketSetKey, snapshotKey}
 	args := []any{versionStr, bucket.String(), snapshotKeyPrefix, snapshotGraceTTLSeconds}
 
-	_, err = activateSnapshotScript.Run(ctx, c.rdb, keys, args...).Result()
+	activatedRaw, err := activateSnapshotScript.Run(ctx, c.rdb, keys, args...).Result()
+	if err != nil {
+		return err
+	}
+	if activated, ok := activatedRaw.(int64); ok && activated == 0 {
+		return nil
+	}
+
+	// 快照 CAS 激活成功后再替换 candidate index，避免旧版本 rebuild 覆盖新版本候选集。
+	return c.SetCandidateIndex(ctx, bucket, accounts)
+}
+
+// SetCandidateIndex 写入 candidate-only 索引：只更新账号快照、候选 zset、
+// candidate ready 和反向索引，不写旧 snapshot active/ready/version key。
+func (c *schedulerCache) SetCandidateIndex(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
+	if err := c.writeAccounts(ctx, accounts); err != nil {
+		return err
+	}
+
+	buildID := strconv.FormatInt(time.Now().UnixNano(), 10)
+	candidateKey := schedulerCandidateKey(bucket)
+	tmpCandidateKey := fmt.Sprintf("%s:tmp:%s", candidateKey, buildID)
+	newCandidateIDs := make(map[string]struct{})
+	candidateMembers := make([]redis.Z, 0, len(accounts))
+	for _, account := range accounts {
+		if !account.IsSchedulable() {
+			continue
+		}
+		id := strconv.FormatInt(account.ID, 10)
+		newCandidateIDs[id] = struct{}{}
+		candidateMembers = append(candidateMembers, redis.Z{
+			Score:  schedulerCandidateScore(account, bucket),
+			Member: id,
+		})
+	}
+	if err := c.rdb.Del(ctx, tmpCandidateKey).Err(); err != nil {
+		return err
+	}
+	if len(candidateMembers) > 0 {
+		pipe := c.rdb.Pipeline()
+		for start := 0; start < len(candidateMembers); start += c.writeChunkSize {
+			end := start + c.writeChunkSize
+			if end > len(candidateMembers) {
+				end = len(candidateMembers)
+			}
+			pipe.ZAdd(ctx, tmpCandidateKey, candidateMembers[start:end]...)
+		}
+		if _, err := pipe.Exec(ctx); err != nil {
+			return err
+		}
+	}
+
+	// 只有 build/rebuild 路径允许读取旧 candidate 全量成员，用于维护反向索引 diff；
+	// 请求热路径的 ListCandidateAccounts 禁止 ZRANGE 0 -1。
+	oldCandidateIDs, err := c.rdb.ZRange(ctx, candidateKey, 0, -1).Result()
+	if err != nil && err != redis.Nil {
+		return err
+	}
+	if err := c.replaceCandidateIndex(ctx, bucket, candidateKey, tmpCandidateKey, candidateMembers, oldCandidateIDs, newCandidateIDs); err != nil {
+		return err
+	}
+	// count 不是统计指标，而是完整性标记：ready=1 且 count>0 但 zset 不存在时，
+	// 请求侧必须把它当成索引丢失并触发构建；count=0 才能把无 zset 解释为空 bucket。
+	pipe := c.rdb.Pipeline()
+	pipe.Set(ctx, schedulerCandidateCountKey(bucket), strconv.Itoa(len(candidateMembers)), 0)
+	pipe.Set(ctx, schedulerBucketKey(schedulerCandidateReadyPrefix, bucket), "1", 0)
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (c *schedulerCache) DeleteOldSnapshots(ctx context.Context, buckets []service.SchedulerBucket) error {
+	seen := make(map[string]service.SchedulerBucket, len(buckets))
+	for _, bucket := range buckets {
+		seen[bucket.String()] = bucket
+	}
+
+	pipe := c.rdb.Pipeline()
+	for _, bucket := range seen {
+		pipe.Del(ctx,
+			schedulerBucketKey(schedulerActivePrefix, bucket),
+			schedulerBucketKey(schedulerReadyPrefix, bucket),
+			schedulerBucketKey(schedulerVersionPrefix, bucket),
+		)
+		pattern := fmt.Sprintf("%s%d:%s:%s:v*", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode)
+		if err := c.scanDelete(ctx, pattern); err != nil {
+			return err
+		}
+	}
+	for _, bucket := range seen {
+		pipe.SRem(ctx, schedulerBucketSetKey, bucket.String())
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// replaceCandidateIndex 原子切换当前 bucket 的候选集合，并按 diff 维护
+// sched:acc-buckets:{id} 反向索引，供状态性 block 低成本删除候选。
+func (c *schedulerCache) replaceCandidateIndex(
+	ctx context.Context,
+	bucket service.SchedulerBucket,
+	candidateKey string,
+	tmpCandidateKey string,
+	candidateMembers []redis.Z,
+	oldCandidateIDs []string,
+	newCandidateIDs map[string]struct{},
+) error {
+	oldSet := make(map[string]struct{}, len(oldCandidateIDs))
+	for _, id := range oldCandidateIDs {
+		oldSet[id] = struct{}{}
+	}
+
+	if len(candidateMembers) > 0 {
+		if err := c.rdb.Rename(ctx, tmpCandidateKey, candidateKey).Err(); err != nil {
+			return err
+		}
+	} else if err := c.rdb.Del(ctx, candidateKey, tmpCandidateKey).Err(); err != nil {
+		return err
+	}
+
+	bucketName := bucket.String()
+	pipe := c.rdb.Pipeline()
+	for id := range oldSet {
+		if _, retained := newCandidateIDs[id]; retained {
+			continue
+		}
+		pipe.SRem(ctx, schedulerAccountBucketsKey(id), bucketName)
+	}
+	for id := range newCandidateIDs {
+		pipe.SAdd(ctx, schedulerAccountBucketsKey(id), bucketName)
+	}
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+// ListCandidateAccounts 是选号热路径：只读固定小批量候选 ID 和对应 meta，
+// 不访问 DB、不重建 bucket、不读取整个候选集合。
+func (c *schedulerCache) ListCandidateAccounts(ctx context.Context, bucket service.SchedulerBucket, opts service.SchedulerCandidateListOptions) ([]*service.Account, bool, error) {
+	readyVal, err := c.rdb.Get(ctx, schedulerBucketKey(schedulerCandidateReadyPrefix, bucket)).Result()
+	if err == redis.Nil {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	if readyVal != "1" {
+		return nil, false, nil
+	}
+
+	expectedCount, hit, err := c.readCandidateCount(ctx, bucket)
+	if err != nil {
+		return nil, false, err
+	}
+	if !hit {
+		// ready 存在但 count 缺失说明不是完整 candidate index。不要把它当成空 bucket；
+		// 上层会触发 targeted build 并等待 ready，避免数据丢失时静默返回 no available。
+		return nil, false, nil
+	}
+
+	limit := opts.Limit
+	if limit <= 0 {
+		limit = service.DefaultSchedulerCandidateFetchLimit
+	}
+	if limit < service.MinSchedulerCandidateFetchLimit {
+		limit = service.MinSchedulerCandidateFetchLimit
+	}
+
+	candidateKey := schedulerCandidateKey(bucket)
+	exists, err := c.rdb.Exists(ctx, candidateKey).Result()
+	if err != nil {
+		return nil, false, err
+	}
+	if exists == 0 {
+		if expectedCount <= 0 {
+			// 空 bucket 也是有效缓存命中，避免空分组在请求路径反复触发构建。
+			return []*service.Account{}, true, nil
+		}
+		return nil, false, nil
+	}
+
+	for attempt := 0; attempt < 3; attempt++ {
+		ids, err := c.rdb.ZRange(ctx, candidateKey, 0, int64(limit-1)).Result()
+		if err != nil {
+			return nil, false, err
+		}
+		if len(ids) == 0 {
+			if expectedCount <= 0 {
+				return []*service.Account{}, true, nil
+			}
+			return nil, false, nil
+		}
+
+		keys := make([]string, 0, len(ids))
+		for _, id := range ids {
+			keys = append(keys, schedulerAccountMetaKey(id))
+		}
+		values, err := c.mgetChunked(ctx, keys)
+		if err != nil {
+			return nil, false, err
+		}
+
+		missing := make([]any, 0)
+		accounts := make([]*service.Account, 0, len(values))
+		for i, val := range values {
+			if val == nil {
+				missing = append(missing, ids[i])
+				continue
+			}
+			account, err := decodeCachedAccount(val)
+			if err != nil {
+				return nil, false, err
+			}
+			accounts = append(accounts, account)
+		}
+		if len(missing) > 0 {
+			// meta 缺失通常说明局部缓存损坏。这里只清理坏 member，最多补两轮，
+			// 仍然不在请求路径访问数据库或触发 rebuild。
+			slog.Warn("scheduler_candidate_index_corrupt_meta_missing",
+				"bucket", bucket.String(),
+				"missing_count", len(missing),
+			)
+			if err := c.rdb.ZRem(ctx, candidateKey, missing...).Err(); err != nil {
+				return nil, false, err
+			}
+			if err := c.incrementCandidateCount(ctx, bucket, -int64(len(missing))); err != nil {
+				return nil, false, err
+			}
+			if len(accounts) == 0 && attempt < 2 {
+				continue
+			}
+		}
+		return accounts, true, nil
+	}
+	return nil, false, nil
+}
+
+// RemoveAccountFromCandidates 处理状态性不可调度：通过反向索引找到账号所在 bucket，
+// 只做 ZREM/SREM 和 blocked 队列写入，不扫描全部 bucket。
+func (c *schedulerCache) RemoveAccountFromCandidates(ctx context.Context, accountID int64, state service.SchedulerBlockedAccountState) ([]service.SchedulerBucket, error) {
+	if accountID <= 0 {
+		return nil, nil
+	}
+	id := strconv.FormatInt(accountID, 10)
+	rawBuckets, err := c.rdb.SMembers(ctx, schedulerAccountBucketsKey(id)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	buckets := make([]service.SchedulerBucket, 0, len(rawBuckets))
+	type removedCandidate struct {
+		bucket service.SchedulerBucket
+		cmd    *redis.IntCmd
+	}
+	removedCandidates := make([]removedCandidate, 0, len(rawBuckets))
+	pipe := c.rdb.Pipeline()
+	for _, raw := range rawBuckets {
+		bucket, ok := service.ParseSchedulerBucket(raw)
+		if !ok {
+			continue
+		}
+		buckets = append(buckets, bucket)
+		cmd := pipe.ZRem(ctx, schedulerCandidateKey(bucket), id)
+		removedCandidates = append(removedCandidates, removedCandidate{bucket: bucket, cmd: cmd})
+	}
+	pipe.Del(ctx, schedulerAccountBucketsKey(id))
+	c.enqueueBlockedAccount(ctx, pipe, accountID, state)
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+	for _, removed := range removedCandidates {
+		if removed.cmd.Val() <= 0 {
+			continue
+		}
+		if err := c.incrementCandidateCount(ctx, removed.bucket, -removed.cmd.Val()); err != nil {
+			return nil, err
+		}
+	}
+	if len(buckets) == 0 {
+		// 反向索引 miss 不做全量补救；缺失通常意味着索引尚未初始化或账号本就不在候选中。
+		slog.Warn("scheduler_candidate_reverse_index_miss",
+			"account_id", accountID,
+			"reason", state.Reason,
+			"source", state.Source,
+		)
+	}
+	return buckets, nil
+}
+
+// RestoreAccountCandidates 只恢复调用方已确认结构归属的账号；内部仍用
+// IsSchedulable 做兜底，避免并发 block/restore 把不可调度账号加回候选池。
+func (c *schedulerCache) RestoreAccountCandidates(ctx context.Context, account *service.Account, buckets []service.SchedulerBucket) error {
+	if account == nil || account.ID <= 0 {
+		return nil
+	}
+	if !account.IsSchedulable() {
+		return nil
+	}
+	if err := c.writeAccounts(ctx, []service.Account{*account}); err != nil {
+		return err
+	}
+
+	id := strconv.FormatInt(account.ID, 10)
+	type addedCandidate struct {
+		bucket service.SchedulerBucket
+		cmd    *redis.IntCmd
+	}
+	addedCandidates := make([]addedCandidate, 0, len(buckets))
+	pipe := c.rdb.Pipeline()
+	for _, bucket := range buckets {
+		cmd := pipe.ZAdd(ctx, schedulerCandidateKey(bucket), redis.Z{
+			Score:  schedulerCandidateScore(*account, bucket),
+			Member: id,
+		})
+		addedCandidates = append(addedCandidates, addedCandidate{bucket: bucket, cmd: cmd})
+		pipe.SAdd(ctx, schedulerAccountBucketsKey(id), bucket.String())
+	}
+	pipe.ZRem(ctx, schedulerBlockedKey, id)
+	pipe.Del(ctx, schedulerBlockKey(id))
+	if _, err := pipe.Exec(ctx); err != nil {
+		return err
+	}
+	for _, added := range addedCandidates {
+		if added.cmd.Val() <= 0 {
+			continue
+		}
+		if err := c.incrementCandidateCount(ctx, added.bucket, added.cmd.Val()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// UpdateCandidateScores 批量更新 LastUsedAt 和候选 zset score。
+// 它只由 deferred/batch 路径调用，避免每个请求同步写候选分数。
+func (c *schedulerCache) UpdateCandidateScores(ctx context.Context, updates map[int64]time.Time) error {
+	if len(updates) == 0 {
+		return nil
+	}
+
+	for id, lastUsedAt := range updates {
+		if err := c.updateCandidateScore(ctx, id, lastUsedAt); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (c *schedulerCache) updateCandidateScore(ctx context.Context, accountID int64, lastUsedAt time.Time) error {
+	if accountID <= 0 {
+		return nil
+	}
+	id := strconv.FormatInt(accountID, 10)
+	accountVal, err := c.rdb.Get(ctx, schedulerAccountKey(id)).Result()
+	if err == redis.Nil {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	account, err := decodeCachedAccount(accountVal)
+	if err != nil {
+		return err
+	}
+	account.LastUsedAt = ptrTime(lastUsedAt)
+
+	rawBuckets, err := c.rdb.SMembers(ctx, schedulerAccountBucketsKey(id)).Result()
 	if err != nil {
 		return err
 	}
 
-	return nil
+	fullPayload, err := json.Marshal(account)
+	if err != nil {
+		return err
+	}
+	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(*account))
+	if err != nil {
+		return err
+	}
+
+	pipe := c.rdb.Pipeline()
+	pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
+	pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
+	for _, raw := range rawBuckets {
+		bucket, ok := service.ParseSchedulerBucket(raw)
+		if !ok {
+			continue
+		}
+		pipe.ZAddXX(ctx, schedulerCandidateKey(bucket), redis.Z{
+			Score:  schedulerCandidateScore(*account, bucket),
+			Member: id,
+		})
+	}
+	_, err = pipe.Exec(ctx)
+	return err
+}
+
+func (c *schedulerCache) PopDueBlockedAccounts(ctx context.Context, now time.Time, limit int) ([]int64, error) {
+	if limit <= 0 {
+		limit = service.DefaultSchedulerCandidateRestoreBatch
+	}
+	raw, err := c.rdb.ZRangeByScore(ctx, schedulerBlockedKey, &redis.ZRangeBy{
+		Min:    "-inf",
+		Max:    strconv.FormatInt(now.Unix(), 10),
+		Offset: 0,
+		Count:  int64(limit),
+	}).Result()
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(raw))
+	for _, item := range raw {
+		id, err := strconv.ParseInt(item, 10, 64)
+		if err != nil {
+			continue
+		}
+		ids = append(ids, id)
+	}
+	return ids, nil
+}
+
+func (c *schedulerCache) AckBlockedAccount(ctx context.Context, accountID int64) error {
+	if accountID <= 0 {
+		return nil
+	}
+	id := strconv.FormatInt(accountID, 10)
+	pipe := c.rdb.Pipeline()
+	pipe.ZRem(ctx, schedulerBlockedKey, id)
+	pipe.Del(ctx, schedulerBlockKey(id))
+	_, err := pipe.Exec(ctx)
+	return err
+}
+
+func (c *schedulerCache) RequeueBlockedAccount(ctx context.Context, accountID int64, until time.Time, reason string) error {
+	if accountID <= 0 {
+		return nil
+	}
+	pipe := c.rdb.Pipeline()
+	c.enqueueBlockedAccount(ctx, pipe, accountID, service.SchedulerBlockedAccountState{
+		AccountID: accountID,
+		Until:     until,
+		Reason:    reason,
+		Source:    "requeue",
+		UpdatedAt: time.Now(),
+	})
+	_, err := pipe.Exec(ctx)
+	return err
 }
 
 func (c *schedulerCache) GetAccount(ctx context.Context, accountID int64) (*service.Account, error) {
@@ -236,45 +688,7 @@ func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) err
 }
 
 func (c *schedulerCache) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
-	if len(updates) == 0 {
-		return nil
-	}
-
-	keys := make([]string, 0, len(updates))
-	ids := make([]int64, 0, len(updates))
-	for id := range updates {
-		keys = append(keys, schedulerAccountKey(strconv.FormatInt(id, 10)))
-		ids = append(ids, id)
-	}
-
-	values, err := c.mgetChunked(ctx, keys)
-	if err != nil {
-		return err
-	}
-
-	pipe := c.rdb.Pipeline()
-	for i, val := range values {
-		if val == nil {
-			continue
-		}
-		account, err := decodeCachedAccount(val)
-		if err != nil {
-			return err
-		}
-		account.LastUsedAt = ptrTime(updates[ids[i]])
-		updated, err := json.Marshal(account)
-		if err != nil {
-			return err
-		}
-		metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(*account))
-		if err != nil {
-			return err
-		}
-		pipe.Set(ctx, keys[i], updated, 0)
-		pipe.Set(ctx, schedulerAccountMetaKey(strconv.FormatInt(ids[i], 10)), metaPayload, 0)
-	}
-	_, err = pipe.Exec(ctx)
-	return err
+	return c.UpdateCandidateScores(ctx, updates)
 }
 
 func (c *schedulerCache) TryLockBucket(ctx context.Context, bucket service.SchedulerBucket, ttl time.Duration) (bool, error) {
@@ -330,6 +744,14 @@ func schedulerSnapshotKey(bucket service.SchedulerBucket, version string) string
 	return fmt.Sprintf("%s%d:%s:%s:v%s", schedulerSnapshotPrefix, bucket.GroupID, bucket.Platform, bucket.Mode, version)
 }
 
+func schedulerCandidateKey(bucket service.SchedulerBucket) string {
+	return schedulerBucketKey(schedulerCandidatePrefix, bucket)
+}
+
+func schedulerCandidateCountKey(bucket service.SchedulerBucket) string {
+	return schedulerBucketKey(schedulerCandidateCountPrefix, bucket)
+}
+
 func schedulerAccountKey(id string) string {
 	return schedulerAccountPrefix + id
 }
@@ -338,8 +760,87 @@ func schedulerAccountMetaKey(id string) string {
 	return schedulerAccountMetaPrefix + id
 }
 
+func schedulerAccountBucketsKey(id string) string {
+	return schedulerAccountBucketsPrefix + id
+}
+
+func schedulerBlockKey(id string) string {
+	return schedulerBlockPrefix + id
+}
+
 func ptrTime(t time.Time) *time.Time {
 	return &t
+}
+
+func schedulerCandidateScore(account service.Account, bucket service.SchedulerBucket) float64 {
+	priority := account.Priority
+	if bucket.GroupID > 0 {
+		for _, group := range account.AccountGroups {
+			if group.GroupID == bucket.GroupID {
+				priority = group.Priority
+				break
+			}
+		}
+	}
+	lastUsedMillis := int64(0)
+	if account.LastUsedAt != nil {
+		lastUsedMillis = account.LastUsedAt.UnixMilli()
+	}
+	return float64(priority)*10000000000000 + float64(lastUsedMillis)
+}
+
+type schedulerBlockedAccountPayload struct {
+	AccountID     int64  `json:"account_id"`
+	UntilUnix     int64  `json:"until_unix"`
+	Reason        string `json:"reason"`
+	Source        string `json:"source"`
+	UpdatedAtUnix int64  `json:"updated_at_unix"`
+}
+
+// enqueueBlockedAccount 写 blocked 延迟队列和调试 payload。
+// 删除候选后账号不会自动回池，必须由立即恢复路径或 worker 根据 DB 最新状态恢复。
+func (c *schedulerCache) enqueueBlockedAccount(ctx context.Context, pipe redis.Pipeliner, accountID int64, state service.SchedulerBlockedAccountState) {
+	if accountID <= 0 {
+		return
+	}
+	now := time.Now()
+	until := state.Until
+	if until.IsZero() || !until.After(now) {
+		until = now.Add(time.Minute)
+	}
+	updatedAt := state.UpdatedAt
+	if updatedAt.IsZero() {
+		updatedAt = now
+	}
+	reason := state.Reason
+	if reason == "" {
+		reason = "blocked"
+	}
+	source := state.Source
+	if source == "" {
+		source = "scheduler_cache"
+	}
+
+	id := strconv.FormatInt(accountID, 10)
+	payload, err := json.Marshal(schedulerBlockedAccountPayload{
+		AccountID:     accountID,
+		UntilUnix:     until.Unix(),
+		Reason:        reason,
+		Source:        source,
+		UpdatedAtUnix: updatedAt.Unix(),
+	})
+	if err != nil {
+		return
+	}
+	ttl := until.Sub(now) + time.Hour
+	if ttl < time.Hour {
+		ttl = time.Hour
+	}
+	pipe.ZAdd(ctx, schedulerBlockedKey, redis.Z{
+		Score:  float64(until.Unix()),
+		Member: id,
+	})
+	pipe.Set(ctx, schedulerBlockKey(id), payload, ttl)
 }
 
 func decodeCachedAccount(val any) (*service.Account, error) {
@@ -424,6 +925,47 @@ func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any,
 		out = append(out, part...)
 	}
 	return out, nil
+}
+
+func (c *schedulerCache) readCandidateCount(ctx context.Context, bucket service.SchedulerBucket) (int64, bool, error) {
+	raw, err := c.rdb.Get(ctx, schedulerCandidateCountKey(bucket)).Result()
+	if err == redis.Nil {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	count, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return 0, false, err
+	}
+	return count, true, nil
+}
+
+func (c *schedulerCache) incrementCandidateCount(ctx context.Context, bucket service.SchedulerBucket, delta int64) error {
+	if delta == 0 {
+		return nil
+	}
+	return adjustCandidateCountScript.Run(ctx, c.rdb, []string{schedulerCandidateCountKey(bucket)}, delta).Err()
+}
+
+func (c *schedulerCache) scanDelete(ctx context.Context, pattern string) error {
+	var cursor uint64
+	for {
+		keys, next, err := c.rdb.Scan(ctx, cursor, pattern, 1000).Result()
+		if err != nil {
+			return err
+		}
+		if len(keys) > 0 {
+			if err := c.rdb.Del(ctx, keys...).Err(); err != nil {
+				return err
+			}
+		}
+		cursor = next
+		if cursor == 0 {
+			return nil
+		}
+	}
 }
 
 func buildSchedulerMetadataAccount(account service.Account) service.Account {

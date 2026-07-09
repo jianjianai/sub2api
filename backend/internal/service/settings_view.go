@@ -241,6 +241,12 @@ type SystemSettings struct {
 	OpenAIAdvancedSchedulerEffectiveWeightQuotaHeadroom    string
 	OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse string
 	OpenAIAdvancedSchedulerEffectiveWeightSessionSticky    string
+	SchedulerCandidateIndexEnabled                         bool
+	SchedulerCandidateIndexStatus                          string
+	SchedulerCandidateIndexError                           string
+	SchedulerCandidateFetchLimit                           int
+	SchedulerCandidateReadyWaitMS                          int
+	SchedulerCandidateBuildWaitMS                          int
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled     bool

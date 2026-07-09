@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"sync/atomic"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -45,19 +46,20 @@ type WebSearchManagerBuilder func(cfg *WebSearchEmulationConfig, proxyURLs map[i
 
 // SettingService 系统设置服务
 type SettingService struct {
-	settingRepo                 SettingRepository
-	defaultSubGroupReader       DefaultSubscriptionGroupReader
-	proxyRepo                   ProxyRepository // for resolving websearch provider proxy URLs
-	cfg                         *config.Config
-	onUpdate                    func() // Callback when settings are updated (for cache invalidation)
-	version                     string // Application version
-	webSearchManagerBuilder     WebSearchManagerBuilder
-	antigravityUAVersionCache   atomic.Value // *cachedAntigravityUserAgentVersion
-	antigravityUAVersionSF      singleflight.Group
-	openAICodexUACache          atomic.Value // *cachedOpenAICodexUserAgent
-	openAICodexUASF             singleflight.Group
-	codexRestrictionPolicyCache atomic.Value // *cachedCodexRestrictionPolicy
-	codexRestrictionPolicySF    singleflight.Group
+	settingRepo                  SettingRepository
+	defaultSubGroupReader        DefaultSubscriptionGroupReader
+	proxyRepo                    ProxyRepository // for resolving websearch provider proxy URLs
+	cfg                          *config.Config
+	onUpdate                     func() // Callback when settings are updated (for cache invalidation)
+	schedulerCandidateController SchedulerCandidateIndexController
+	version                      string // Application version
+	webSearchManagerBuilder      WebSearchManagerBuilder
+	antigravityUAVersionCache    atomic.Value // *cachedAntigravityUserAgentVersion
+	antigravityUAVersionSF       singleflight.Group
+	openAICodexUACache           atomic.Value // *cachedOpenAICodexUserAgent
+	openAICodexUASF              singleflight.Group
+	codexRestrictionPolicyCache  atomic.Value // *cachedCodexRestrictionPolicy
+	codexRestrictionPolicySF     singleflight.Group
 
 	cyberSessionBlockRuntimeCache atomic.Value // *cachedCyberSessionBlockRuntime
 	cyberSessionBlockRuntimeSF    singleflight.Group
@@ -70,6 +72,10 @@ type SettingService struct {
 	// instance owns its own cache, no shared package-level state.
 	openAIQuotaAutoPauseSettingsCache atomic.Value // *cachedOpenAIQuotaAutoPauseSettings
 	openAIQuotaAutoPauseSettingsSF    singleflight.Group
+}
+
+type SchedulerCandidateIndexController interface {
+	ApplyCandidateIndexTarget(ctx context.Context, enabled bool) SchedulerCandidateIndexSwitchState
 }
 
 // DefaultPlatformQuotaSetting 单 platform 三档限额（nil = 沿用上层；0 = 显式禁用；>0 = 上限）
@@ -247,6 +253,55 @@ func (s *SettingService) GetAllSettings(ctx context.Context) (*SystemSettings, e
 // This is used for cache invalidation (e.g., HTML cache in frontend server)
 func (s *SettingService) SetOnUpdateCallback(callback func()) {
 	s.onUpdate = callback
+}
+
+func (s *SettingService) SetSchedulerCandidateIndexController(controller SchedulerCandidateIndexController) {
+	if s == nil {
+		return
+	}
+	s.schedulerCandidateController = controller
+}
+
+func (s *SettingService) ApplySchedulerCandidateIndexTarget(ctx context.Context, enabled bool) (SchedulerCandidateIndexSwitchState, error) {
+	if s == nil {
+		return SchedulerCandidateIndexSwitchState{Enabled: enabled, Status: SchedulerCandidateStatusFailed, LastError: "setting service unavailable"}, nil
+	}
+	state := SchedulerCandidateIndexSwitchState{Enabled: enabled, Status: SchedulerCandidateStatusDisabled}
+	if enabled {
+		state.Status = SchedulerCandidateStatusFailed
+		state.LastError = "scheduler candidate index controller unavailable"
+		if s.schedulerCandidateController != nil {
+			state = s.schedulerCandidateController.ApplyCandidateIndexTarget(ctx, true)
+		}
+	} else if s.schedulerCandidateController != nil {
+		state = s.schedulerCandidateController.ApplyCandidateIndexTarget(ctx, false)
+	}
+	if err := s.UpdateSchedulerCandidateIndexState(ctx, state); err != nil {
+		return state, err
+	}
+	return state, nil
+}
+
+func (s *SettingService) UpdateSchedulerCandidateIndexState(ctx context.Context, state SchedulerCandidateIndexSwitchState) error {
+	if s == nil || s.settingRepo == nil {
+		return nil
+	}
+	state.Status = normalizeSchedulerCandidateStatus(state.Status, state.Enabled)
+	if !state.Enabled {
+		state.LastError = ""
+	}
+	updates := map[string]string{
+		SettingKeySchedulerCandidateIndexEnabled: strconv.FormatBool(state.Enabled),
+		SettingKeySchedulerCandidateIndexStatus:  state.Status,
+		SettingKeySchedulerCandidateIndexError:   state.LastError,
+	}
+	if err := s.settingRepo.SetMultiple(ctx, updates); err != nil {
+		return err
+	}
+	if s.cfg != nil {
+		s.cfg.Gateway.Scheduling.CandidateIndexEnabled = state.Enabled
+	}
+	return nil
 }
 
 // SetVersion sets the application version for injection into public settings

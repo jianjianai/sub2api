@@ -441,6 +441,27 @@ gateway:
     # Tiny in-process TTL for batch load reads in milliseconds (0 disables)
     # 调度批量负载读取的进程内短缓存 TTL（毫秒，0 表示禁用）
     load_batch_cache_ttl_ms: 200
+    # Enable Redis candidate index reads for OpenAI-compatible scheduling (default off).
+    # 启用 OpenAI 兼容调度的 Redis 候选索引读取（默认关闭）。
+    candidate_index_enabled: false
+    # Max candidate accounts read from the index per selection, must be >= 8.
+    # 每次选号最多从候选索引读取的账号数，必须 >= 8。
+    candidate_fetch_limit: 64
+    # Small-bucket threshold reserved for full small-pool candidate reads.
+    # 小账号池阈值，预留用于小池全量候选读取策略。
+    candidate_small_bucket_threshold: 32
+    # Blocked-account restore batch size.
+    # blocked 账号恢复批处理大小。
+    candidate_restore_batch_size: 100
+    # Blocked-account restore interval in milliseconds.
+    # blocked 账号恢复轮询间隔（毫秒）。
+    candidate_restore_interval_ms: 1000
+    # Short wait for candidate ready marker propagation in milliseconds.
+    # candidate ready 标记短暂传播等待（毫秒）。
+    candidate_ready_wait_ms: 200
+    # Max time a request waits for missing candidate index build in milliseconds.
+    # 当前 bucket 索引缺失时，请求等待构建完成的上限（毫秒）。
+    candidate_build_wait_ms: 5000
     # Slot cleanup interval (duration)
     # 并发槽位清理周期（时间段）
     slot_cleanup_interval: 30s

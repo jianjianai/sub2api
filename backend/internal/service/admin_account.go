@@ -626,20 +626,39 @@ func (s *adminServiceImpl) ClearAccountError(ctx context.Context, id int64) (*Ac
 	if s.runtimeBlocker != nil {
 		s.runtimeBlocker.ClearAccountSchedulingBlock(id)
 	}
-	return s.accountRepo.GetByID(ctx, id)
+	updated, err := s.accountRepo.GetByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	notifyCandidateIndexRestored(ctx, s.runtimeBlocker, id, "admin_clear_error")
+	return updated, nil
 }
 
 func (s *adminServiceImpl) SetAccountError(ctx context.Context, id int64, errorMsg string) error {
-	return s.accountRepo.SetError(ctx, id, errorMsg)
+	account, _ := s.accountRepo.GetByID(ctx, id)
+	if err := s.accountRepo.SetError(ctx, id, errorMsg); err != nil {
+		return err
+	}
+	notifyCandidateIndexBlocked(ctx, s.runtimeBlocker, account, time.Time{}, "admin_set_error", "admin_service")
+	return nil
 }
 
 func (s *adminServiceImpl) SetAccountSchedulable(ctx context.Context, id int64, schedulable bool) (*Account, error) {
+	account, _ := s.accountRepo.GetByID(ctx, id)
 	if err := s.accountRepo.SetSchedulable(ctx, id, schedulable); err != nil {
 		return nil, err
 	}
 	updated, err := s.accountRepo.GetByID(ctx, id)
 	if err != nil {
 		return nil, err
+	}
+	if schedulable {
+		notifyCandidateIndexRestored(ctx, s.runtimeBlocker, id, "admin_schedulable_true")
+	} else {
+		if account == nil {
+			account = updated
+		}
+		notifyCandidateIndexBlocked(ctx, s.runtimeBlocker, account, time.Time{}, "admin_schedulable_false", "admin_service")
 	}
 	return updated, nil
 }

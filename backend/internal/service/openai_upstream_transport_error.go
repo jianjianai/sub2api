@@ -180,6 +180,7 @@ func (s *OpenAIGatewayService) tempUnscheduleOpenAITransportError(ctx context.Co
 		)
 		return
 	}
+	s.BlockAccountCandidates(bgCtx, account, until, "transport_error", "openai_transport_error")
 
 	// DB write succeeded: both in-memory and persisted.
 	logger.L().With(zap.String("component", "service.openai_gateway")).Warn(

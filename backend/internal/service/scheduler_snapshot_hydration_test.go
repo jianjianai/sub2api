@@ -23,6 +23,14 @@ func (c *snapshotHydrationCache) SetSnapshot(ctx context.Context, bucket Schedul
 	return nil
 }
 
+func (c *snapshotHydrationCache) SetCandidateIndex(ctx context.Context, bucket SchedulerBucket, accounts []Account) error {
+	return nil
+}
+
+func (c *snapshotHydrationCache) DeleteOldSnapshots(ctx context.Context, buckets []SchedulerBucket) error {
+	return nil
+}
+
 func (c *snapshotHydrationCache) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
 	if c.accounts == nil {
 		return nil, nil
@@ -39,6 +47,34 @@ func (c *snapshotHydrationCache) DeleteAccount(ctx context.Context, accountID in
 }
 
 func (c *snapshotHydrationCache) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+
+func (c *snapshotHydrationCache) ListCandidateAccounts(ctx context.Context, bucket SchedulerBucket, opts SchedulerCandidateListOptions) ([]*Account, bool, error) {
+	return nil, false, nil
+}
+
+func (c *snapshotHydrationCache) RemoveAccountFromCandidates(ctx context.Context, accountID int64, state SchedulerBlockedAccountState) ([]SchedulerBucket, error) {
+	return nil, nil
+}
+
+func (c *snapshotHydrationCache) RestoreAccountCandidates(ctx context.Context, account *Account, buckets []SchedulerBucket) error {
+	return nil
+}
+
+func (c *snapshotHydrationCache) UpdateCandidateScores(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+
+func (c *snapshotHydrationCache) PopDueBlockedAccounts(ctx context.Context, now time.Time, limit int) ([]int64, error) {
+	return nil, nil
+}
+
+func (c *snapshotHydrationCache) AckBlockedAccount(ctx context.Context, accountID int64) error {
+	return nil
+}
+
+func (c *snapshotHydrationCache) RequeueBlockedAccount(ctx context.Context, accountID int64, until time.Time, reason string) error {
 	return nil
 }
 

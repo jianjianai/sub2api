@@ -4,10 +4,29 @@ package repository
 
 import (
 	"testing"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 )
+
+func TestSchedulerCandidateScoreUsesGroupPriorityAndLastUsed(t *testing.T) {
+	lastUsed := time.UnixMilli(1234).UTC()
+	account := service.Account{
+		ID:         42,
+		Priority:   9,
+		LastUsedAt: &lastUsed,
+		AccountGroups: []service.AccountGroup{
+			{GroupID: 7, Priority: 2},
+		},
+	}
+
+	score := schedulerCandidateScore(account, service.SchedulerBucket{GroupID: 7})
+	require.Equal(t, float64(2)*10000000000000+float64(1234), score)
+
+	ungroupedScore := schedulerCandidateScore(account, service.SchedulerBucket{GroupID: 0})
+	require.Equal(t, float64(9)*10000000000000+float64(1234), ungroupedScore)
+}
 
 func TestBuildSchedulerMetadataAccount_KeepsOpenAIWSFlags(t *testing.T) {
 	account := service.Account{

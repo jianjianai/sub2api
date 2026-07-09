@@ -138,6 +138,20 @@ func (s *RateLimitService) notifyAccountSchedulingBlockCleared(accountID int64) 
 	s.runtimeBlocker.ClearAccountSchedulingBlock(accountID)
 }
 
+func (s *RateLimitService) notifyAccountCandidateBlocked(ctx context.Context, account *Account, until time.Time, reason string, source string) {
+	if s == nil || s.runtimeBlocker == nil || account == nil {
+		return
+	}
+	notifyCandidateIndexBlocked(ctx, s.runtimeBlocker, account, until, reason, source)
+}
+
+func (s *RateLimitService) notifyAccountCandidateRestored(ctx context.Context, accountID int64, source string) {
+	if s == nil || s.runtimeBlocker == nil || accountID <= 0 {
+		return
+	}
+	notifyCandidateIndexRestored(ctx, s.runtimeBlocker, accountID, source)
+}
+
 // ErrorPolicyResult 表示错误策略检查的结果
 type ErrorPolicyResult int
 
@@ -322,6 +336,8 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			s.notifyAccountSchedulingBlocked(authAccount, until, "oauth_401")
 			if err := s.accountRepo.SetTempUnschedulable(ctx, authAccount.ID, until, msg); err != nil {
 				slog.Warn("oauth_401_set_temp_unschedulable_failed", "account_id", authAccount.ID, "error", err)
+			} else {
+				s.notifyAccountCandidateBlocked(ctx, authAccount, until, "oauth_401", "ratelimit_service")
 			}
 			shouldDisable = true
 		} else {
@@ -763,6 +779,7 @@ func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account
 		slog.Warn("account_set_error_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, time.Time{}, "auth_error", "ratelimit_service")
 	slog.Warn("account_disabled_auth_error", "account_id", account.ID, "error", errorMsg)
 }
 
@@ -845,6 +862,7 @@ func (s *RateLimitService) handleOpenAI403(ctx context.Context, account *Account
 		s.handleAuthError(ctx, account, msg)
 		return true
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, until, "openai_403_temp", "ratelimit_service")
 
 	slog.Warn(
 		"openai_403_temp_unschedulable",
@@ -910,6 +928,7 @@ func (s *RateLimitService) handleCustomErrorCode(ctx context.Context, account *A
 		slog.Warn("account_set_error_failed", "account_id", account.ID, "status_code", statusCode, "error", err)
 		return
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, time.Time{}, "custom_error_code", "ratelimit_service")
 	slog.Warn("account_disabled_custom_error", "account_id", account.ID, "status_code", statusCode, "error", errorMsg)
 }
 
@@ -934,6 +953,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 				slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 				return
 			}
+			s.notifyAccountCandidateBlocked(ctx, account, *resetAt, "429", "ratelimit_service")
 			slog.Info("openai_account_rate_limited", "account_id", account.ID, "reset_at", *resetAt)
 			return
 		}
@@ -946,6 +966,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 			slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 			return
 		}
+		s.notifyAccountCandidateBlocked(ctx, account, result.resetAt, "429", "ratelimit_service")
 
 		// 更新 session window：优先使用 5h-reset 头精确计算，否则从 resetAt 反推
 		windowEnd := result.resetAt
@@ -976,6 +997,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
+				s.notifyAccountCandidateBlocked(ctx, account, resetTime, "429", "ratelimit_service")
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
@@ -988,6 +1010,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 					slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 					return
 				}
+				s.notifyAccountCandidateBlocked(ctx, account, resetTime, "429", "ratelimit_service")
 				slog.Info("account_rate_limited", "account_id", account.ID, "platform", account.Platform, "reset_at", resetTime, "reset_in", time.Until(resetTime).Truncate(time.Second))
 				return
 			}
@@ -1024,6 +1047,7 @@ func (s *RateLimitService) handle429(ctx context.Context, account *Account, head
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, resetAt, "429", "ratelimit_service")
 
 	// 根据重置时间反推5h窗口
 	windowEnd := resetAt
@@ -1047,7 +1071,9 @@ func (s *RateLimitService) apply429FallbackRateLimit(ctx context.Context, accoun
 	s.notifyAccountSchedulingBlocked(account, resetAt, "429_fallback")
 	if err := s.accountRepo.SetRateLimited(ctx, account.ID, resetAt); err != nil {
 		slog.Warn("rate_limit_set_failed", "account_id", account.ID, "error", err)
+		return
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, resetAt, "429_fallback", "ratelimit_service")
 }
 
 func (s *RateLimitService) get429FallbackCooldown(ctx context.Context, account *Account) (time.Duration, bool) {
@@ -1243,6 +1269,7 @@ func (s *RateLimitService) persistAnthropicExhaustedWindowLimit(ctx context.Cont
 			"error", err)
 		return true
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, limit.resetAt, limit.reason, "ratelimit_service")
 	slog.Info("anthropic_window_rate_limited",
 		"account_id", account.ID,
 		"window", limit.window,
@@ -1589,6 +1616,7 @@ func (s *RateLimitService) handle529(ctx context.Context, account *Account) {
 		slog.Warn("overload_set_failed", "account_id", account.ID, "error", err)
 		return
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, until, "529", "ratelimit_service")
 
 	slog.Info("account_overloaded", "account_id", account.ID, "until", until)
 }
@@ -1738,6 +1766,7 @@ func (s *RateLimitService) ClearRateLimit(ctx context.Context, accountID int64) 
 	}
 	s.ResetOpenAI403Counter(ctx, accountID)
 	s.notifyAccountSchedulingBlockCleared(accountID)
+	s.notifyAccountCandidateRestored(ctx, accountID, "ratelimit_clear")
 	return nil
 }
 
@@ -1781,6 +1810,7 @@ func (s *RateLimitService) RecoverAccountState(ctx context.Context, accountID in
 		if result.ClearedError && !result.ClearedRateLimit {
 			s.notifyAccountSchedulingBlockCleared(accountID)
 		}
+		s.notifyAccountCandidateRestored(ctx, accountID, "ratelimit_recover")
 	}
 
 	return result, nil
@@ -1806,6 +1836,7 @@ func (s *RateLimitService) ClearTempUnschedulable(ctx context.Context, accountID
 		slog.Warn("clear_model_rate_limits_on_temp_unsched_reset_failed", "account_id", accountID, "error", err)
 	}
 	s.notifyAccountSchedulingBlockCleared(accountID)
+	s.notifyAccountCandidateRestored(ctx, accountID, "temp_unsched_clear")
 	return nil
 }
 
@@ -2166,6 +2197,7 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
 		return false
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, until, "temp_unschedulable", "ratelimit_service")
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
@@ -2271,6 +2303,7 @@ func (s *RateLimitService) triggerStreamTimeoutTempUnsched(ctx context.Context, 
 		slog.Warn("stream_timeout_set_temp_unsched_failed", "account_id", account.ID, "error", err)
 		return false
 	}
+	s.notifyAccountCandidateBlocked(ctx, account, until, "stream_timeout_temp_unschedulable", "ratelimit_service")
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {

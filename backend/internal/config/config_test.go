@@ -76,6 +76,27 @@ func TestLoadDefaultSchedulingConfig(t *testing.T) {
 	if cfg.Gateway.Scheduling.LoadBatchCacheTTLMS != 200 {
 		t.Fatalf("LoadBatchCacheTTLMS = %d, want 200", cfg.Gateway.Scheduling.LoadBatchCacheTTLMS)
 	}
+	if cfg.Gateway.Scheduling.CandidateIndexEnabled {
+		t.Fatalf("CandidateIndexEnabled = true, want false")
+	}
+	if cfg.Gateway.Scheduling.CandidateFetchLimit != 64 {
+		t.Fatalf("CandidateFetchLimit = %d, want 64", cfg.Gateway.Scheduling.CandidateFetchLimit)
+	}
+	if cfg.Gateway.Scheduling.CandidateSmallBucketThreshold != 32 {
+		t.Fatalf("CandidateSmallBucketThreshold = %d, want 32", cfg.Gateway.Scheduling.CandidateSmallBucketThreshold)
+	}
+	if cfg.Gateway.Scheduling.CandidateRestoreBatchSize != 100 {
+		t.Fatalf("CandidateRestoreBatchSize = %d, want 100", cfg.Gateway.Scheduling.CandidateRestoreBatchSize)
+	}
+	if cfg.Gateway.Scheduling.CandidateRestoreIntervalMS != 1000 {
+		t.Fatalf("CandidateRestoreIntervalMS = %d, want 1000", cfg.Gateway.Scheduling.CandidateRestoreIntervalMS)
+	}
+	if cfg.Gateway.Scheduling.CandidateReadyWaitMS != 200 {
+		t.Fatalf("CandidateReadyWaitMS = %d, want 200", cfg.Gateway.Scheduling.CandidateReadyWaitMS)
+	}
+	if cfg.Gateway.Scheduling.CandidateBuildWaitMS != 5000 {
+		t.Fatalf("CandidateBuildWaitMS = %d, want 5000", cfg.Gateway.Scheduling.CandidateBuildWaitMS)
+	}
 	if cfg.Gateway.Scheduling.SlotCleanupInterval != 30*time.Second {
 		t.Fatalf("SlotCleanupInterval = %v, want 30s", cfg.Gateway.Scheduling.SlotCleanupInterval)
 	}
@@ -298,6 +319,10 @@ func TestLoadIdempotencyConfigFromEnv(t *testing.T) {
 func TestLoadSchedulingConfigFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_SCHEDULING_STICKY_SESSION_MAX_WAITING", "5")
+	t.Setenv("GATEWAY_SCHEDULING_CANDIDATE_INDEX_ENABLED", "true")
+	t.Setenv("GATEWAY_SCHEDULING_CANDIDATE_FETCH_LIMIT", "96")
+	t.Setenv("GATEWAY_SCHEDULING_CANDIDATE_READY_WAIT_MS", "250")
+	t.Setenv("GATEWAY_SCHEDULING_CANDIDATE_BUILD_WAIT_MS", "7000")
 
 	cfg, err := Load()
 	if err != nil {
@@ -307,6 +332,10 @@ func TestLoadSchedulingConfigFromEnv(t *testing.T) {
 	if cfg.Gateway.Scheduling.StickySessionMaxWaiting != 5 {
 		t.Fatalf("StickySessionMaxWaiting = %d, want 5", cfg.Gateway.Scheduling.StickySessionMaxWaiting)
 	}
+	require.True(t, cfg.Gateway.Scheduling.CandidateIndexEnabled)
+	require.Equal(t, 96, cfg.Gateway.Scheduling.CandidateFetchLimit)
+	require.Equal(t, 250, cfg.Gateway.Scheduling.CandidateReadyWaitMS)
+	require.Equal(t, 7000, cfg.Gateway.Scheduling.CandidateBuildWaitMS)
 }
 
 func TestLoadWeChatConnectConfigFromLegacyEnv(t *testing.T) {

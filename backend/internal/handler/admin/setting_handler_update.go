@@ -255,6 +255,10 @@ type UpdateSettingsRequest struct {
 	OpenAIAdvancedSchedulerWeightQuotaHeadroom         *string `json:"openai_advanced_scheduler_weight_quota_headroom"`
 	OpenAIAdvancedSchedulerWeightPreviousResponse      *string `json:"openai_advanced_scheduler_weight_previous_response"`
 	OpenAIAdvancedSchedulerWeightSessionSticky         *string `json:"openai_advanced_scheduler_weight_session_sticky"`
+	SchedulerCandidateIndexEnabled                     *bool   `json:"scheduler_candidate_index_enabled"`
+	SchedulerCandidateFetchLimit                       *int    `json:"scheduler_candidate_fetch_limit"`
+	SchedulerCandidateReadyWaitMS                      *int    `json:"scheduler_candidate_ready_wait_ms"`
+	SchedulerCandidateBuildWaitMS                      *int    `json:"scheduler_candidate_build_wait_ms"`
 
 	// 余额不足提醒
 	BalanceLowNotifyEnabled         *bool                   `json:"balance_low_notify_enabled"`
@@ -1451,6 +1455,17 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerWeightQuotaHeadroom:    stringSetting(req.OpenAIAdvancedSchedulerWeightQuotaHeadroom, previousSettings.OpenAIAdvancedSchedulerWeightQuotaHeadroom),
 		OpenAIAdvancedSchedulerWeightPreviousResponse: stringSetting(req.OpenAIAdvancedSchedulerWeightPreviousResponse, previousSettings.OpenAIAdvancedSchedulerWeightPreviousResponse),
 		OpenAIAdvancedSchedulerWeightSessionSticky:    stringSetting(req.OpenAIAdvancedSchedulerWeightSessionSticky, previousSettings.OpenAIAdvancedSchedulerWeightSessionSticky),
+		SchedulerCandidateIndexEnabled: func() bool {
+			if req.SchedulerCandidateIndexEnabled != nil {
+				return *req.SchedulerCandidateIndexEnabled
+			}
+			return previousSettings.SchedulerCandidateIndexEnabled
+		}(),
+		SchedulerCandidateIndexStatus: previousSettings.SchedulerCandidateIndexStatus,
+		SchedulerCandidateIndexError:  previousSettings.SchedulerCandidateIndexError,
+		SchedulerCandidateFetchLimit:  intValueOrDefault(req.SchedulerCandidateFetchLimit, previousSettings.SchedulerCandidateFetchLimit),
+		SchedulerCandidateReadyWaitMS: intValueOrDefault(req.SchedulerCandidateReadyWaitMS, previousSettings.SchedulerCandidateReadyWaitMS),
+		SchedulerCandidateBuildWaitMS: intValueOrDefault(req.SchedulerCandidateBuildWaitMS, previousSettings.SchedulerCandidateBuildWaitMS),
 		BalanceLowNotifyEnabled: func() bool {
 			if req.BalanceLowNotifyEnabled != nil {
 				return *req.BalanceLowNotifyEnabled
@@ -1595,6 +1610,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	if err := h.settingService.UpdateSettingsWithAuthSourceDefaults(c.Request.Context(), settings, authSourceDefaults); err != nil {
 		response.ErrorFrom(c, err)
 		return
+	}
+	if req.SchedulerCandidateIndexEnabled != nil {
+		if _, err := h.settingService.ApplySchedulerCandidateIndexTarget(c.Request.Context(), *req.SchedulerCandidateIndexEnabled); err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
 	}
 
 	// Update OpenAI fast policy (stored under dedicated key, only when provided).
@@ -1847,6 +1868,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		OpenAIAdvancedSchedulerEffectiveWeightQuotaHeadroom:    updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightQuotaHeadroom,
 		OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse: updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse,
 		OpenAIAdvancedSchedulerEffectiveWeightSessionSticky:    updatedSettings.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky,
+		SchedulerCandidateIndexEnabled:                         updatedSettings.SchedulerCandidateIndexEnabled,
+		SchedulerCandidateIndexStatus:                          updatedSettings.SchedulerCandidateIndexStatus,
+		SchedulerCandidateIndexError:                           updatedSettings.SchedulerCandidateIndexError,
+		SchedulerCandidateFetchLimit:                           updatedSettings.SchedulerCandidateFetchLimit,
+		SchedulerCandidateReadyWaitMS:                          updatedSettings.SchedulerCandidateReadyWaitMS,
+		SchedulerCandidateBuildWaitMS:                          updatedSettings.SchedulerCandidateBuildWaitMS,
 		BalanceLowNotifyEnabled:                                updatedSettings.BalanceLowNotifyEnabled,
 		BalanceLowNotifyThreshold:                              updatedSettings.BalanceLowNotifyThreshold,
 		BalanceLowNotifyRechargeURL:                            updatedSettings.BalanceLowNotifyRechargeURL,

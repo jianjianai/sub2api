@@ -226,6 +226,12 @@ func (s *SettingService) InitializeDefaultSettings(ctx context.Context) error {
 		SettingKeyOpenAIAdvancedSchedulerWeightQuotaHeadroom:         "",
 		SettingKeyOpenAIAdvancedSchedulerWeightPreviousResponse:      "",
 		SettingKeyOpenAIAdvancedSchedulerWeightSessionSticky:         "",
+		SettingKeySchedulerCandidateIndexEnabled:                     "false",
+		SettingKeySchedulerCandidateIndexStatus:                      SchedulerCandidateStatusDisabled,
+		SettingKeySchedulerCandidateIndexError:                       "",
+		SettingKeySchedulerCandidateFetchLimit:                       strconv.Itoa(DefaultSchedulerCandidateFetchLimit),
+		SettingKeySchedulerCandidateReadyWaitMS:                      strconv.Itoa(DefaultSchedulerCandidateReadyWaitMS),
+		SettingKeySchedulerCandidateBuildWaitMS:                      strconv.Itoa(DefaultSchedulerCandidateBuildWaitMS),
 
 		SettingKeyAllowUserViewErrorRequests: "false",
 	}
@@ -811,6 +817,19 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	result.OpenAIAdvancedSchedulerEffectiveWeightQuotaHeadroom = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.QuotaHeadroom)
 	result.OpenAIAdvancedSchedulerEffectiveWeightPreviousResponse = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.PreviousResponse)
 	result.OpenAIAdvancedSchedulerEffectiveWeightSessionSticky = formatOpenAIAdvancedSchedulerFloat(effectiveWeights.SessionSticky)
+	if raw, ok := settings[SettingKeySchedulerCandidateIndexEnabled]; ok && strings.TrimSpace(raw) != "" {
+		result.SchedulerCandidateIndexEnabled = raw == "true"
+	} else if s != nil && s.cfg != nil {
+		result.SchedulerCandidateIndexEnabled = s.cfg.Gateway.Scheduling.CandidateIndexEnabled
+	}
+	result.SchedulerCandidateIndexStatus = normalizeSchedulerCandidateStatus(settings[SettingKeySchedulerCandidateIndexStatus], result.SchedulerCandidateIndexEnabled)
+	if !result.SchedulerCandidateIndexEnabled {
+		result.SchedulerCandidateIndexStatus = SchedulerCandidateStatusDisabled
+	}
+	result.SchedulerCandidateIndexError = settings[SettingKeySchedulerCandidateIndexError]
+	result.SchedulerCandidateFetchLimit = s.schedulerCandidateFetchLimitFromSetting(settings[SettingKeySchedulerCandidateFetchLimit])
+	result.SchedulerCandidateReadyWaitMS = s.schedulerCandidateReadyWaitMSFromSetting(settings[SettingKeySchedulerCandidateReadyWaitMS])
+	result.SchedulerCandidateBuildWaitMS = s.schedulerCandidateBuildWaitMSFromSetting(settings[SettingKeySchedulerCandidateBuildWaitMS])
 
 	// 余额、订阅到期与账号限额通知
 	result.BalanceLowNotifyEnabled = settings[SettingKeyBalanceLowNotifyEnabled] == "true"
@@ -958,6 +977,86 @@ func (s *SettingService) normalizeOpenAIAdvancedSchedulerOverrides(settings *Sys
 		return infraerrors.BadRequest("INVALID_OPENAI_ADVANCED_SCHEDULER_WEIGHT", "openai advanced scheduler base weights must not all be zero")
 	}
 	return nil
+}
+
+func (s *SettingService) normalizeSchedulerCandidateRuntimeSettings(settings *SystemSettings) error {
+	if settings == nil {
+		return nil
+	}
+
+	// 这三个值会直接影响请求等待与 Redis 候选池读取量；保存时先归一化，
+	// 再刷新到 cfg，确保后台开关异步切换时用到的是管理员刚保存的参数。
+	if settings.SchedulerCandidateFetchLimit == 0 {
+		settings.SchedulerCandidateFetchLimit = s.schedulerCandidateFetchLimitDefault()
+	}
+	if settings.SchedulerCandidateFetchLimit < 0 || (settings.SchedulerCandidateFetchLimit > 0 && settings.SchedulerCandidateFetchLimit < MinSchedulerCandidateFetchLimit) {
+		return infraerrors.BadRequest("INVALID_SCHEDULER_CANDIDATE_FETCH_LIMIT", "scheduler candidate fetch limit must be at least 8")
+	}
+	if settings.SchedulerCandidateReadyWaitMS == 0 {
+		settings.SchedulerCandidateReadyWaitMS = s.schedulerCandidateReadyWaitMSDefault()
+	}
+	if settings.SchedulerCandidateReadyWaitMS < 0 {
+		return infraerrors.BadRequest("INVALID_SCHEDULER_CANDIDATE_READY_WAIT_MS", "scheduler candidate ready wait must be a positive millisecond value")
+	}
+	if settings.SchedulerCandidateBuildWaitMS == 0 {
+		settings.SchedulerCandidateBuildWaitMS = s.schedulerCandidateBuildWaitMSDefault()
+	}
+	if settings.SchedulerCandidateBuildWaitMS < 0 {
+		return infraerrors.BadRequest("INVALID_SCHEDULER_CANDIDATE_BUILD_WAIT_MS", "scheduler candidate build wait must be a positive millisecond value")
+	}
+	return nil
+}
+
+func (s *SettingService) schedulerCandidateFetchLimitFromSetting(raw string) int {
+	value := parsePositiveIntSetting(raw, s.schedulerCandidateFetchLimitDefault())
+	if value < MinSchedulerCandidateFetchLimit {
+		return MinSchedulerCandidateFetchLimit
+	}
+	return value
+}
+
+func (s *SettingService) schedulerCandidateReadyWaitMSFromSetting(raw string) int {
+	return parsePositiveIntSetting(raw, s.schedulerCandidateReadyWaitMSDefault())
+}
+
+func (s *SettingService) schedulerCandidateBuildWaitMSFromSetting(raw string) int {
+	return parsePositiveIntSetting(raw, s.schedulerCandidateBuildWaitMSDefault())
+}
+
+func (s *SettingService) schedulerCandidateFetchLimitDefault() int {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.Scheduling.CandidateFetchLimit > 0 {
+		if s.cfg.Gateway.Scheduling.CandidateFetchLimit < MinSchedulerCandidateFetchLimit {
+			return MinSchedulerCandidateFetchLimit
+		}
+		return s.cfg.Gateway.Scheduling.CandidateFetchLimit
+	}
+	return DefaultSchedulerCandidateFetchLimit
+}
+
+func (s *SettingService) schedulerCandidateReadyWaitMSDefault() int {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.Scheduling.CandidateReadyWaitMS > 0 {
+		return s.cfg.Gateway.Scheduling.CandidateReadyWaitMS
+	}
+	return DefaultSchedulerCandidateReadyWaitMS
+}
+
+func (s *SettingService) schedulerCandidateBuildWaitMSDefault() int {
+	if s != nil && s.cfg != nil && s.cfg.Gateway.Scheduling.CandidateBuildWaitMS > 0 {
+		return s.cfg.Gateway.Scheduling.CandidateBuildWaitMS
+	}
+	return DefaultSchedulerCandidateBuildWaitMS
+}
+
+func parsePositiveIntSetting(raw string, fallback int) int {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }
 
 // resolveOpenAIAdvancedSchedulerWeight 返回覆盖值（已归一化的非空字符串），空则回退默认值。

@@ -34,6 +34,12 @@ func (f *fakeSchedulerCache) GetSnapshot(_ context.Context, _ service.SchedulerB
 func (f *fakeSchedulerCache) SetSnapshot(_ context.Context, _ service.SchedulerBucket, _ []service.Account) error {
 	return nil
 }
+func (f *fakeSchedulerCache) SetCandidateIndex(_ context.Context, _ service.SchedulerBucket, _ []service.Account) error {
+	return nil
+}
+func (f *fakeSchedulerCache) DeleteOldSnapshots(_ context.Context, _ []service.SchedulerBucket) error {
+	return nil
+}
 func (f *fakeSchedulerCache) GetAccount(_ context.Context, id int64) (*service.Account, error) {
 	for _, account := range f.accounts {
 		if account != nil && account.ID == id {
@@ -45,6 +51,27 @@ func (f *fakeSchedulerCache) GetAccount(_ context.Context, id int64) (*service.A
 func (f *fakeSchedulerCache) SetAccount(_ context.Context, _ *service.Account) error { return nil }
 func (f *fakeSchedulerCache) DeleteAccount(_ context.Context, _ int64) error         { return nil }
 func (f *fakeSchedulerCache) UpdateLastUsed(_ context.Context, _ map[int64]time.Time) error {
+	return nil
+}
+func (f *fakeSchedulerCache) ListCandidateAccounts(_ context.Context, _ service.SchedulerBucket, _ service.SchedulerCandidateListOptions) ([]*service.Account, bool, error) {
+	return nil, false, nil
+}
+func (f *fakeSchedulerCache) RemoveAccountFromCandidates(_ context.Context, _ int64, _ service.SchedulerBlockedAccountState) ([]service.SchedulerBucket, error) {
+	return nil, nil
+}
+func (f *fakeSchedulerCache) RestoreAccountCandidates(_ context.Context, _ *service.Account, _ []service.SchedulerBucket) error {
+	return nil
+}
+func (f *fakeSchedulerCache) UpdateCandidateScores(_ context.Context, _ map[int64]time.Time) error {
+	return nil
+}
+func (f *fakeSchedulerCache) PopDueBlockedAccounts(_ context.Context, _ time.Time, _ int) ([]int64, error) {
+	return nil, nil
+}
+func (f *fakeSchedulerCache) AckBlockedAccount(_ context.Context, _ int64) error {
+	return nil
+}
+func (f *fakeSchedulerCache) RequeueBlockedAccount(_ context.Context, _ int64, _ time.Time, _ string) error {
 	return nil
 }
 func (f *fakeSchedulerCache) TryLockBucket(_ context.Context, _ service.SchedulerBucket, _ time.Duration) (bool, error) {

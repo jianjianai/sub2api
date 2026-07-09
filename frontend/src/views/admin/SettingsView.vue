@@ -4021,6 +4021,95 @@
               </div>
 
               <div
+                class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700"
+              >
+                <div>
+                  <div class="flex items-center gap-2">
+                    <label
+                      class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                    >
+                      {{
+                        t(
+                          "admin.settings.openaiExperimentalScheduler.candidateIndexTitle",
+                        )
+                      }}
+                    </label>
+                    <span
+                      class="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium"
+                      :class="schedulerCandidateIndexStatusClass"
+                    >
+                      {{ schedulerCandidateIndexStatusLabel }}
+                    </span>
+                  </div>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.openaiExperimentalScheduler.candidateIndexDescription",
+                      )
+                    }}
+                  </p>
+                  <p
+                    v-if="form.scheduler_candidate_index_error"
+                    class="mt-1 text-xs text-red-600 dark:text-red-400"
+                  >
+                    {{ form.scheduler_candidate_index_error }}
+                  </p>
+                </div>
+                <Toggle v-model="form.scheduler_candidate_index_enabled" />
+              </div>
+
+              <div
+                v-if="form.scheduler_candidate_index_enabled"
+                class="border-t border-gray-100 pt-5 dark:border-dark-700"
+              >
+                <div>
+                  <label
+                    class="text-sm font-medium text-gray-700 dark:text-gray-300"
+                  >
+                    {{
+                      t(
+                        "admin.settings.openaiExperimentalScheduler.candidateConfigTitle",
+                      )
+                    }}
+                  </label>
+                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                    {{
+                      t(
+                        "admin.settings.openaiExperimentalScheduler.candidateConfigDescription",
+                      )
+                    }}
+                  </p>
+                </div>
+
+                <div class="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-3">
+                  <label
+                    v-for="field in schedulerCandidateRuntimeFields"
+                    :key="field.key"
+                    class="block"
+                  >
+                    <span class="text-xs font-medium text-gray-600 dark:text-gray-400">
+                      {{ field.label }}
+                    </span>
+                    <input
+                      v-model.number="form[field.key]"
+                      class="input mt-1"
+                      :min="field.min"
+                      :step="field.step"
+                      autocomplete="off"
+                      inputmode="numeric"
+                      type="number"
+                    />
+                    <span class="mt-1 block text-xs text-gray-500 dark:text-gray-400">
+                      {{ field.description }}
+                    </span>
+                    <span class="mt-1 block text-[11px] leading-4 text-primary-600 dark:text-primary-400">
+                      {{ field.recommendation }}
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div
                 v-if="form.openai_advanced_scheduler_enabled"
                 class="flex items-center justify-between border-t border-gray-100 pt-5 dark:border-dark-700"
               >
@@ -8023,6 +8112,12 @@ type SettingsForm = Omit<
   openai_advanced_scheduler_weight_quota_headroom: string;
   openai_advanced_scheduler_weight_previous_response: string;
   openai_advanced_scheduler_weight_session_sticky: string;
+  scheduler_candidate_index_enabled: boolean;
+  scheduler_candidate_index_status: string;
+  scheduler_candidate_index_error: string;
+  scheduler_candidate_fetch_limit: number;
+  scheduler_candidate_ready_wait_ms: number;
+  scheduler_candidate_build_wait_ms: number;
   // 系统全局平台限额 map；form 内始终归一化为全 4 平台对象（模板非空绑定依赖此不变量）
   default_platform_quotas: DefaultPlatformQuotasMap;
 };
@@ -8227,6 +8322,12 @@ const form = reactive<SettingsForm>({
   openai_advanced_scheduler_weight_quota_headroom: "",
   openai_advanced_scheduler_weight_previous_response: "",
   openai_advanced_scheduler_weight_session_sticky: "",
+  scheduler_candidate_index_enabled: false,
+  scheduler_candidate_index_status: "disabled",
+  scheduler_candidate_index_error: "",
+  scheduler_candidate_fetch_limit: 64,
+  scheduler_candidate_ready_wait_ms: 200,
+  scheduler_candidate_build_wait_ms: 5000,
   // Gateway forwarding behavior
   enable_fingerprint_unification: true,
   enable_metadata_passthrough: false,
@@ -8359,6 +8460,78 @@ const openAIAdvancedSchedulerWeightFields = computed<
       placeholder: placeholder("openai_advanced_scheduler_effective_weight_session_sticky", "3"),
     },
   ];
+});
+
+type SchedulerCandidateRuntimeKey =
+  | "scheduler_candidate_fetch_limit"
+  | "scheduler_candidate_ready_wait_ms"
+  | "scheduler_candidate_build_wait_ms";
+
+const schedulerCandidateRuntimeFields = computed<
+  Array<{
+    key: SchedulerCandidateRuntimeKey;
+    label: string;
+    description: string;
+    recommendation: string;
+    min: number;
+    step: number;
+  }>
+>(() => [
+  {
+    key: "scheduler_candidate_fetch_limit",
+    label: t("admin.settings.openaiExperimentalScheduler.candidateFetchLimitLabel"),
+    description: t("admin.settings.openaiExperimentalScheduler.candidateFetchLimitDescription"),
+    recommendation: t("admin.settings.openaiExperimentalScheduler.candidateFetchLimitRecommendation"),
+    min: 8,
+    step: 1,
+  },
+  {
+    key: "scheduler_candidate_ready_wait_ms",
+    label: t("admin.settings.openaiExperimentalScheduler.candidateReadyWaitLabel"),
+    description: t("admin.settings.openaiExperimentalScheduler.candidateReadyWaitDescription"),
+    recommendation: t("admin.settings.openaiExperimentalScheduler.candidateReadyWaitRecommendation"),
+    min: 1,
+    step: 50,
+  },
+  {
+    key: "scheduler_candidate_build_wait_ms",
+    label: t("admin.settings.openaiExperimentalScheduler.candidateBuildWaitLabel"),
+    description: t("admin.settings.openaiExperimentalScheduler.candidateBuildWaitDescription"),
+    recommendation: t("admin.settings.openaiExperimentalScheduler.candidateBuildWaitRecommendation"),
+    min: 1,
+    step: 500,
+  },
+]);
+
+const schedulerCandidateIndexStatusLabel = computed(() => {
+  const status = String(form.scheduler_candidate_index_status || "").trim();
+  if (!form.scheduler_candidate_index_enabled) {
+    return t("admin.settings.openaiExperimentalScheduler.candidateIndexDisabled");
+  }
+  if (status === "building") {
+    return t("admin.settings.openaiExperimentalScheduler.candidateIndexBuilding");
+  }
+  if (status === "active") {
+    return t("admin.settings.openaiExperimentalScheduler.candidateIndexActive");
+  }
+  if (status === "failed") {
+    return t("admin.settings.openaiExperimentalScheduler.candidateIndexFailed");
+  }
+  return t("admin.settings.openaiExperimentalScheduler.candidateIndexBuilding");
+});
+
+const schedulerCandidateIndexStatusClass = computed(() => {
+  const status = String(form.scheduler_candidate_index_status || "").trim();
+  if (!form.scheduler_candidate_index_enabled) {
+    return "bg-gray-100 text-gray-700 dark:bg-dark-700 dark:text-gray-300";
+  }
+  if (status === "active") {
+    return "bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300";
+  }
+  if (status === "failed") {
+    return "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300";
+  }
+  return "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300";
 });
 
 const authSourceDefaults = reactive<AuthSourceDefaultsState>(
@@ -9231,6 +9404,11 @@ function findDuplicateDefaultSubscription(
   });
 }
 
+function positiveIntegerOrDefault(value: unknown, fallback: number): number {
+  const normalized = Math.floor(Number(value));
+  return Number.isFinite(normalized) && normalized > 0 ? normalized : fallback;
+}
+
 async function saveSettings() {
   saving.value = true;
   try {
@@ -9615,6 +9793,20 @@ async function saveSettings() {
         form.openai_advanced_scheduler_weight_previous_response.trim(),
       openai_advanced_scheduler_weight_session_sticky:
         form.openai_advanced_scheduler_weight_session_sticky.trim(),
+      scheduler_candidate_index_enabled:
+        form.scheduler_candidate_index_enabled,
+      scheduler_candidate_fetch_limit: positiveIntegerOrDefault(
+        form.scheduler_candidate_fetch_limit,
+        64,
+      ),
+      scheduler_candidate_ready_wait_ms: positiveIntegerOrDefault(
+        form.scheduler_candidate_ready_wait_ms,
+        200,
+      ),
+      scheduler_candidate_build_wait_ms: positiveIntegerOrDefault(
+        form.scheduler_candidate_build_wait_ms,
+        5000,
+      ),
       // 余额、订阅到期与账号限额通知
       balance_low_notify_enabled: form.balance_low_notify_enabled,
       balance_low_notify_threshold:

@@ -274,9 +274,23 @@ func ProvideSchedulerSnapshotService(
 	outboxRepo SchedulerOutboxRepository,
 	accountRepo AccountRepository,
 	groupRepo GroupRepository,
+	settingService *SettingService,
 	cfg *config.Config,
 ) *SchedulerSnapshotService {
 	svc := NewSchedulerSnapshotService(cache, outboxRepo, accountRepo, groupRepo, cfg)
+	if settingService != nil {
+		svc.SetCandidateIndexStatusUpdater(settingService.UpdateSchedulerCandidateIndexState)
+		if settings, err := settingService.GetAllSettings(context.Background()); err == nil && settings != nil {
+			svc.ConfigureCandidateIndexState(SchedulerCandidateIndexSwitchState{
+				Enabled:   settings.SchedulerCandidateIndexEnabled,
+				Status:    settings.SchedulerCandidateIndexStatus,
+				LastError: settings.SchedulerCandidateIndexError,
+			})
+		} else if err != nil {
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] load candidate switch setting failed: %v", err)
+		}
+		settingService.SetSchedulerCandidateIndexController(svc)
+	}
 	svc.Start()
 	return svc
 }

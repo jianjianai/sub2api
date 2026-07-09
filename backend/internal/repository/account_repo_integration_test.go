@@ -35,6 +35,14 @@ func (s *schedulerCacheRecorder) SetSnapshot(ctx context.Context, bucket service
 	return nil
 }
 
+func (s *schedulerCacheRecorder) SetCandidateIndex(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) DeleteOldSnapshots(ctx context.Context, buckets []service.SchedulerBucket) error {
+	return nil
+}
+
 func (s *schedulerCacheRecorder) GetAccount(ctx context.Context, accountID int64) (*service.Account, error) {
 	if s.accounts == nil {
 		return nil, nil
@@ -62,6 +70,34 @@ func (s *schedulerCacheRecorder) DeleteAccount(ctx context.Context, accountID in
 }
 
 func (s *schedulerCacheRecorder) UpdateLastUsed(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) ListCandidateAccounts(ctx context.Context, bucket service.SchedulerBucket, opts service.SchedulerCandidateListOptions) ([]*service.Account, bool, error) {
+	return nil, false, nil
+}
+
+func (s *schedulerCacheRecorder) RemoveAccountFromCandidates(ctx context.Context, accountID int64, state service.SchedulerBlockedAccountState) ([]service.SchedulerBucket, error) {
+	return nil, nil
+}
+
+func (s *schedulerCacheRecorder) RestoreAccountCandidates(ctx context.Context, account *service.Account, buckets []service.SchedulerBucket) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) UpdateCandidateScores(ctx context.Context, updates map[int64]time.Time) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) PopDueBlockedAccounts(ctx context.Context, now time.Time, limit int) ([]int64, error) {
+	return nil, nil
+}
+
+func (s *schedulerCacheRecorder) AckBlockedAccount(ctx context.Context, accountID int64) error {
+	return nil
+}
+
+func (s *schedulerCacheRecorder) RequeueBlockedAccount(ctx context.Context, accountID int64, until time.Time, reason string) error {
 	return nil
 }
 

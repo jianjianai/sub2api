@@ -619,6 +619,12 @@ export interface SystemSettings {
   openai_advanced_scheduler_weight_quota_headroom?: string;
   openai_advanced_scheduler_weight_previous_response?: string;
   openai_advanced_scheduler_weight_session_sticky?: string;
+  scheduler_candidate_index_enabled?: boolean;
+  scheduler_candidate_index_status?: string;
+  scheduler_candidate_index_error?: string;
+  scheduler_candidate_fetch_limit?: number;
+  scheduler_candidate_ready_wait_ms?: number;
+  scheduler_candidate_build_wait_ms?: number;
   openai_advanced_scheduler_effective_lb_top_k?: string;
   openai_advanced_scheduler_effective_weight_priority?: string;
   openai_advanced_scheduler_effective_weight_load?: string;
@@ -891,6 +897,10 @@ export interface UpdateSettingsRequest {
   openai_advanced_scheduler_weight_quota_headroom?: string;
   openai_advanced_scheduler_weight_previous_response?: string;
   openai_advanced_scheduler_weight_session_sticky?: string;
+  scheduler_candidate_index_enabled?: boolean;
+  scheduler_candidate_fetch_limit?: number;
+  scheduler_candidate_ready_wait_ms?: number;
+  scheduler_candidate_build_wait_ms?: number;
   // 余额、订阅到期与账号限额通知
   balance_low_notify_enabled?: boolean;
   balance_low_notify_threshold?: number;

@@ -14,8 +14,9 @@ import (
 )
 
 var (
-	ErrSchedulerCacheNotReady   = errors.New("scheduler cache not ready")
-	ErrSchedulerFallbackLimited = errors.New("scheduler db fallback limited")
+	ErrSchedulerCacheNotReady    = errors.New("scheduler cache not ready")
+	ErrSchedulerCacheUnavailable = errors.New("scheduler cache unavailable")
+	ErrSchedulerFallbackLimited  = errors.New("scheduler db fallback limited")
 )
 
 const (
@@ -43,6 +44,12 @@ type SchedulerSnapshotService struct {
 	fallbackLimit *fallbackLimiter
 	lagMu         sync.Mutex
 	lagFailures   int
+
+	candidateMu            sync.RWMutex
+	candidateTargetEnabled bool
+	candidateStatus        string
+	candidateLastError     string
+	candidateStatusUpdater func(context.Context, SchedulerCandidateIndexSwitchState) error
 }
 
 func NewSchedulerSnapshotService(
@@ -56,14 +63,21 @@ func NewSchedulerSnapshotService(
 	if cfg != nil {
 		maxQPS = cfg.Gateway.Scheduling.DbFallbackMaxQPS
 	}
+	targetEnabled := cfg != nil && cfg.Gateway.Scheduling.CandidateIndexEnabled
+	status := SchedulerCandidateStatusDisabled
+	if targetEnabled {
+		status = SchedulerCandidateStatusBuilding
+	}
 	return &SchedulerSnapshotService{
-		cache:         cache,
-		outboxRepo:    outboxRepo,
-		accountRepo:   accountRepo,
-		groupRepo:     groupRepo,
-		cfg:           cfg,
-		stopCh:        make(chan struct{}),
-		fallbackLimit: newFallbackLimiter(maxQPS),
+		cache:                  cache,
+		outboxRepo:             outboxRepo,
+		accountRepo:            accountRepo,
+		groupRepo:              groupRepo,
+		cfg:                    cfg,
+		stopCh:                 make(chan struct{}),
+		fallbackLimit:          newFallbackLimiter(maxQPS),
+		candidateTargetEnabled: targetEnabled,
+		candidateStatus:        status,
 	}
 }
 
@@ -107,10 +121,100 @@ func (s *SchedulerSnapshotService) Stop() {
 	s.wg.Wait()
 }
 
+func (s *SchedulerSnapshotService) SetCandidateIndexStatusUpdater(updater func(context.Context, SchedulerCandidateIndexSwitchState) error) {
+	if s == nil {
+		return
+	}
+	s.candidateMu.Lock()
+	defer s.candidateMu.Unlock()
+	s.candidateStatusUpdater = updater
+}
+
+func (s *SchedulerSnapshotService) ConfigureCandidateIndexState(state SchedulerCandidateIndexSwitchState) {
+	if s == nil {
+		return
+	}
+	status := normalizeSchedulerCandidateStatus(state.Status, state.Enabled)
+	s.candidateMu.Lock()
+	s.candidateTargetEnabled = state.Enabled
+	s.candidateStatus = status
+	s.candidateLastError = state.LastError
+	s.candidateMu.Unlock()
+	if s.cfg != nil {
+		s.cfg.Gateway.Scheduling.CandidateIndexEnabled = state.Enabled
+	}
+}
+
+func (s *SchedulerSnapshotService) CandidateIndexState() SchedulerCandidateIndexSwitchState {
+	if s == nil {
+		return SchedulerCandidateIndexSwitchState{Status: SchedulerCandidateStatusDisabled}
+	}
+	s.candidateMu.RLock()
+	defer s.candidateMu.RUnlock()
+	return SchedulerCandidateIndexSwitchState{
+		Enabled:   s.candidateTargetEnabled,
+		Status:    normalizeSchedulerCandidateStatus(s.candidateStatus, s.candidateTargetEnabled),
+		LastError: s.candidateLastError,
+	}
+}
+
+func (s *SchedulerSnapshotService) ApplyCandidateIndexTarget(ctx context.Context, enabled bool) SchedulerCandidateIndexSwitchState {
+	if s == nil {
+		return SchedulerCandidateIndexSwitchState{Enabled: enabled, Status: SchedulerCandidateStatusFailed, LastError: "scheduler snapshot service unavailable"}
+	}
+	if !enabled {
+		state := SchedulerCandidateIndexSwitchState{Enabled: false, Status: SchedulerCandidateStatusDisabled}
+		s.setCandidateIndexState(ctx, state)
+		return state
+	}
+
+	state := SchedulerCandidateIndexSwitchState{Enabled: true, Status: SchedulerCandidateStatusBuilding}
+	s.setCandidateIndexState(ctx, state)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		s.runCandidateActivation("admin_enable", true)
+	}()
+	return state
+}
+
+func (s *SchedulerSnapshotService) setCandidateIndexState(ctx context.Context, state SchedulerCandidateIndexSwitchState) {
+	if s == nil {
+		return
+	}
+	state.Status = normalizeSchedulerCandidateStatus(state.Status, state.Enabled)
+	s.candidateMu.Lock()
+	s.candidateTargetEnabled = state.Enabled
+	s.candidateStatus = state.Status
+	s.candidateLastError = state.LastError
+	updater := s.candidateStatusUpdater
+	s.candidateMu.Unlock()
+	if s.cfg != nil {
+		s.cfg.Gateway.Scheduling.CandidateIndexEnabled = state.Enabled
+	}
+	if updater != nil {
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := updater(ctx, state); err != nil {
+			slog.Warn("scheduler_candidate_status_persist_failed",
+				"enabled", state.Enabled,
+				"status", state.Status,
+				"error", err,
+			)
+		}
+	}
+}
+
 func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, groupID *int64, platform string, hasForcePlatform bool) ([]Account, bool, error) {
 	useMixed := (platform == PlatformAnthropic || platform == PlatformGemini) && !hasForcePlatform
 	mode := s.resolveMode(platform, hasForcePlatform)
 	bucket := s.bucketFor(groupID, platform, mode)
+
+	if s.shouldUseCandidateIndex(bucket) {
+		accounts, err := s.listCandidateOnlyAccounts(ctx, bucket)
+		return accounts, useMixed, err
+	}
 
 	if s.cache != nil {
 		cached, hit, err := s.cache.GetSnapshot(ctx, bucket)
@@ -140,6 +244,117 @@ func (s *SchedulerSnapshotService) ListSchedulableAccounts(ctx context.Context, 
 	}
 
 	return accounts, useMixed, nil
+}
+
+func (s *SchedulerSnapshotService) shouldUseCandidateIndex(bucket SchedulerBucket) bool {
+	if s == nil || s.cache == nil || !s.isCandidateTargetEnabled() {
+		return false
+	}
+	// 这里看的是“目标开关”，不是 active 状态：管理员一旦启用，OpenAI/Grok
+	// 请求就必须进入 candidate-only 流程。building 时等待索引，failed 时返回明确 503，
+	// 都不能继续读取旧 snapshot 或 DB fallback。
+	return bucket.Platform == PlatformOpenAI || bucket.Platform == PlatformGrok
+}
+
+func (s *SchedulerSnapshotService) listCandidateOnlyAccounts(ctx context.Context, bucket SchedulerBucket) ([]Account, error) {
+	if state := s.CandidateIndexState(); state.Enabled && state.Status == SchedulerCandidateStatusFailed {
+		return nil, ErrSchedulerCacheNotReady
+	}
+
+	candidates, hit, err := s.cache.ListCandidateAccounts(ctx, bucket, SchedulerCandidateListOptions{
+		Limit: s.candidateFetchLimit(),
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] candidate index read failed: bucket=%s err=%v", bucket.String(), err)
+		return nil, ErrSchedulerCacheUnavailable
+	}
+	if hit {
+		return derefAccounts(candidates), nil
+	}
+
+	logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] candidate index miss: bucket=%s", bucket.String())
+	if err := s.ensureCandidateBucketReady(ctx, bucket); err != nil {
+		return nil, err
+	}
+
+	candidates, hit, err = s.cache.ListCandidateAccounts(ctx, bucket, SchedulerCandidateListOptions{
+		Limit: s.candidateFetchLimit(),
+	})
+	if err != nil {
+		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] candidate index read failed after build: bucket=%s err=%v", bucket.String(), err)
+		return nil, ErrSchedulerCacheUnavailable
+	}
+	if !hit {
+		return nil, ErrSchedulerCacheNotReady
+	}
+	return derefAccounts(candidates), nil
+}
+
+func (s *SchedulerSnapshotService) ensureCandidateBucketReady(ctx context.Context, bucket SchedulerBucket) error {
+	if s == nil || s.cache == nil {
+		return ErrSchedulerCacheNotReady
+	}
+	wait := s.candidateBuildWaitDuration()
+	buildCtx, cancel := context.WithTimeout(ctx, wait)
+	defer cancel()
+
+	if err := s.rebuildBucket(buildCtx, bucket, "candidate_miss"); err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(s.candidateReadyWaitDuration())
+	defer ticker.Stop()
+	for {
+		_, hit, err := s.cache.ListCandidateAccounts(buildCtx, bucket, SchedulerCandidateListOptions{Limit: s.candidateFetchLimit()})
+		if err != nil {
+			return ErrSchedulerCacheUnavailable
+		}
+		if hit {
+			return nil
+		}
+		select {
+		case <-buildCtx.Done():
+			return ErrSchedulerCacheNotReady
+		case <-ticker.C:
+		}
+	}
+}
+
+func (s *SchedulerSnapshotService) candidateFetchLimit() int {
+	if s == nil || s.cfg == nil {
+		return DefaultSchedulerCandidateFetchLimit
+	}
+	limit := s.cfg.Gateway.Scheduling.CandidateFetchLimit
+	if limit <= 0 {
+		return DefaultSchedulerCandidateFetchLimit
+	}
+	if limit < MinSchedulerCandidateFetchLimit {
+		return MinSchedulerCandidateFetchLimit
+	}
+	return limit
+}
+
+func (s *SchedulerSnapshotService) candidateReadyWaitDuration() time.Duration {
+	if s == nil || s.cfg == nil || s.cfg.Gateway.Scheduling.CandidateReadyWaitMS <= 0 {
+		return time.Duration(DefaultSchedulerCandidateReadyWaitMS) * time.Millisecond
+	}
+	return time.Duration(s.cfg.Gateway.Scheduling.CandidateReadyWaitMS) * time.Millisecond
+}
+
+func (s *SchedulerSnapshotService) candidateBuildWaitDuration() time.Duration {
+	if s == nil || s.cfg == nil || s.cfg.Gateway.Scheduling.CandidateBuildWaitMS <= 0 {
+		return time.Duration(DefaultSchedulerCandidateBuildWaitMS) * time.Millisecond
+	}
+	return time.Duration(s.cfg.Gateway.Scheduling.CandidateBuildWaitMS) * time.Millisecond
+}
+
+func (s *SchedulerSnapshotService) isCandidateTargetEnabled() bool {
+	if s == nil {
+		return false
+	}
+	s.candidateMu.RLock()
+	defer s.candidateMu.RUnlock()
+	return s.candidateTargetEnabled
 }
 
 func (s *SchedulerSnapshotService) GetAccount(ctx context.Context, accountID int64) (*Account, error) {
@@ -185,6 +400,13 @@ func (s *SchedulerSnapshotService) runInitialRebuild() {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
+
+	if s.isCandidateTargetEnabled() {
+		// 启动时目标开关已开启时先恢复 candidate index。索引完整则恢复 active；
+		// 索引缺失或损坏则立刻构建。请求侧也会按 bucket 等待，不回旧调度。
+		s.runCandidateActivation("startup", false)
+	}
+
 	buckets, err := s.cache.ListBuckets(ctx)
 	if err != nil {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] list buckets failed: %v", err)
@@ -195,6 +417,10 @@ func (s *SchedulerSnapshotService) runInitialRebuild() {
 			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] default buckets failed: %v", err)
 			return
 		}
+	}
+	buckets = s.filterLegacySnapshotBuckets(buckets)
+	if len(buckets) == 0 {
+		return
 	}
 	if err := s.rebuildBuckets(ctx, buckets, "startup"); err != nil {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild startup failed: %v", err)
@@ -590,6 +816,14 @@ func (s *SchedulerSnapshotService) rebuildBucket(ctx context.Context, bucket Sch
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
 	}
+	if s.shouldUseCandidateIndex(bucket) {
+		if err := s.cache.SetCandidateIndex(rebuildCtx, bucket, accounts); err != nil {
+			logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] candidate rebuild cache failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
+			return err
+		}
+		slog.Debug("[Scheduler] candidate rebuild ok", "bucket", bucket.String(), "reason", reason, "size", len(accounts))
+		return nil
+	}
 	if err := s.cache.SetSnapshot(rebuildCtx, bucket, accounts); err != nil {
 		logger.LegacyPrintf("service.scheduler_snapshot", "[Scheduler] rebuild cache failed: bucket=%s reason=%s err=%v", bucket.String(), reason, err)
 		return err
@@ -618,6 +852,115 @@ func (s *SchedulerSnapshotService) triggerFullRebuild(reason string) error {
 		}
 	}
 	return s.rebuildBuckets(ctx, buckets, reason)
+}
+
+func (s *SchedulerSnapshotService) runCandidateActivation(reason string, forceBuild bool) {
+	if s == nil || s.cache == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	state := SchedulerCandidateIndexSwitchState{Enabled: true, Status: SchedulerCandidateStatusBuilding}
+	s.setCandidateIndexState(ctx, state)
+
+	buckets, err := s.candidateBuckets(ctx)
+	if err != nil {
+		s.failCandidateActivation(ctx, err)
+		return
+	}
+	if len(buckets) == 0 {
+		s.setCandidateIndexState(ctx, SchedulerCandidateIndexSwitchState{Enabled: true, Status: SchedulerCandidateStatusActive})
+		return
+	}
+	if !forceBuild {
+		ready, readyErr := s.candidateBucketsReady(ctx, buckets)
+		if readyErr != nil {
+			s.failCandidateActivation(ctx, readyErr)
+			return
+		}
+		if ready {
+			// 即使索引已经 ready，也必须清掉旧 snapshot key 后才能标记 active。
+			// 这样 active 后不会留下可被旧路径误读的 OpenAI/Grok snapshot。
+			if err := s.cache.DeleteOldSnapshots(ctx, buckets); err != nil {
+				s.failCandidateActivation(ctx, err)
+				return
+			}
+			s.setCandidateIndexState(ctx, SchedulerCandidateIndexSwitchState{Enabled: true, Status: SchedulerCandidateStatusActive})
+			return
+		}
+	}
+	if err := s.rebuildBuckets(ctx, buckets, reason); err != nil {
+		s.failCandidateActivation(ctx, err)
+		return
+	}
+	if ready, err := s.candidateBucketsReady(ctx, buckets); err != nil {
+		s.failCandidateActivation(ctx, err)
+		return
+	} else if !ready {
+		s.failCandidateActivation(ctx, ErrSchedulerCacheNotReady)
+		return
+	}
+	if err := s.cache.DeleteOldSnapshots(ctx, buckets); err != nil {
+		s.failCandidateActivation(ctx, err)
+		return
+	}
+	// 删除旧 key 成功是 active 的最后门槛；失败时保持 failed，让请求返回明确 503。
+	s.setCandidateIndexState(ctx, SchedulerCandidateIndexSwitchState{Enabled: true, Status: SchedulerCandidateStatusActive})
+	slog.Info("scheduler_candidate_build_activated", "reason", reason, "bucket_count", len(buckets))
+}
+
+func (s *SchedulerSnapshotService) failCandidateActivation(ctx context.Context, err error) {
+	if err == nil {
+		err = ErrSchedulerCacheNotReady
+	}
+	slog.Warn("scheduler_candidate_build_failed", "error", err)
+	s.setCandidateIndexState(ctx, SchedulerCandidateIndexSwitchState{
+		Enabled:   true,
+		Status:    SchedulerCandidateStatusFailed,
+		LastError: err.Error(),
+	})
+}
+
+func (s *SchedulerSnapshotService) candidateBuckets(ctx context.Context) ([]SchedulerBucket, error) {
+	buckets, err := s.defaultBuckets(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]SchedulerBucket, 0, len(buckets))
+	for _, bucket := range buckets {
+		if bucket.Platform == PlatformOpenAI || bucket.Platform == PlatformGrok {
+			out = append(out, bucket)
+		}
+	}
+	return dedupeBuckets(out), nil
+}
+
+func (s *SchedulerSnapshotService) candidateBucketsReady(ctx context.Context, buckets []SchedulerBucket) (bool, error) {
+	for _, bucket := range buckets {
+		_, hit, err := s.cache.ListCandidateAccounts(ctx, bucket, SchedulerCandidateListOptions{Limit: s.candidateFetchLimit()})
+		if err != nil {
+			return false, err
+		}
+		if !hit {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *SchedulerSnapshotService) filterLegacySnapshotBuckets(buckets []SchedulerBucket) []SchedulerBucket {
+	if len(buckets) == 0 || !s.isCandidateTargetEnabled() {
+		return buckets
+	}
+	out := make([]SchedulerBucket, 0, len(buckets))
+	for _, bucket := range buckets {
+		if bucket.Platform == PlatformOpenAI || bucket.Platform == PlatformGrok {
+			continue
+		}
+		out = append(out, bucket)
+	}
+	return out
 }
 
 func (s *SchedulerSnapshotService) checkOutboxLag(ctx context.Context, oldest SchedulerOutboxEvent, watermark int64) {
@@ -752,6 +1095,32 @@ func (s *SchedulerSnapshotService) normalizeGroupIDs(groupIDs []int64) []int64 {
 	return out
 }
 
+// CandidateBucketsForAccount 统一计算单账号当前应进入哪些候选 bucket。
+// 它只处理结构归属，不判断可调度性，也不写 Redis。
+func (s *SchedulerSnapshotService) CandidateBucketsForAccount(ctx context.Context, account *Account) ([]SchedulerBucket, error) {
+	if account == nil || account.ID <= 0 || account.Platform == "" {
+		return nil, nil
+	}
+	groupIDs := make([]int64, 0, len(account.GroupIDs)+len(account.AccountGroups))
+	groupIDs = append(groupIDs, account.GroupIDs...)
+	for _, group := range account.AccountGroups {
+		if group.GroupID > 0 {
+			groupIDs = append(groupIDs, group.GroupID)
+		}
+	}
+	groupIDs = s.normalizeGroupIDs(groupIDs)
+
+	buckets := make([]SchedulerBucket, 0, len(groupIDs)*3)
+	for _, groupID := range groupIDs {
+		buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: account.Platform, Mode: SchedulerModeSingle})
+		buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: account.Platform, Mode: SchedulerModeForced})
+		if account.Platform == PlatformAnthropic || account.Platform == PlatformGemini {
+			buckets = append(buckets, SchedulerBucket{GroupID: groupID, Platform: account.Platform, Mode: SchedulerModeMixed})
+		}
+	}
+	return dedupeBuckets(buckets), nil
+}
+
 func (s *SchedulerSnapshotService) resolveMode(platform string, hasForcePlatform bool) string {
 	if hasForcePlatform {
 		return SchedulerModeForced
@@ -873,6 +1242,18 @@ func derefAccounts(accounts []*Account) []Account {
 		out = append(out, *account)
 	}
 	return out
+}
+
+func normalizeSchedulerCandidateStatus(status string, enabled bool) string {
+	if !enabled {
+		return SchedulerCandidateStatusDisabled
+	}
+	switch status {
+	case SchedulerCandidateStatusBuilding, SchedulerCandidateStatusActive, SchedulerCandidateStatusFailed:
+		return status
+	default:
+		return SchedulerCandidateStatusBuilding
+	}
 }
 
 func parseInt64Slice(value any) []int64 {
