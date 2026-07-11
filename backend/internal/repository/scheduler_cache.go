@@ -181,13 +181,14 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	versionStr := strconv.FormatInt(version, 10)
 	snapshotKey := schedulerSnapshotKey(bucket, versionStr)
 
-	if err := c.writeAccounts(ctx, accounts); err != nil {
+	cacheableAccounts, err := c.writeAccounts(ctx, accounts)
+	if err != nil {
 		return err
 	}
 
-	if len(accounts) > 0 {
-		members := make([]redis.Z, 0, len(accounts))
-		for idx, account := range accounts {
+	if len(cacheableAccounts) > 0 {
+		members := make([]redis.Z, 0, len(cacheableAccounts))
+		for idx, account := range cacheableAccounts {
 			members = append(members, redis.Z{
 				Score:  float64(idx),
 				Member: strconv.FormatInt(account.ID, 10),
@@ -222,13 +223,14 @@ func (c *schedulerCache) SetSnapshot(ctx context.Context, bucket service.Schedul
 	}
 
 	// 快照 CAS 激活成功后再替换 candidate index，避免旧版本 rebuild 覆盖新版本候选集。
-	return c.SetCandidateIndex(ctx, bucket, accounts)
+	return c.SetCandidateIndex(ctx, bucket, cacheableAccounts)
 }
 
 // SetCandidateIndex 写入 candidate-only 索引：只更新账号快照、候选 zset、
 // candidate ready 和反向索引，不写旧 snapshot active/ready/version key。
 func (c *schedulerCache) SetCandidateIndex(ctx context.Context, bucket service.SchedulerBucket, accounts []service.Account) error {
-	if err := c.writeAccounts(ctx, accounts); err != nil {
+	cacheableAccounts, err := c.writeAccounts(ctx, accounts)
+	if err != nil {
 		return err
 	}
 
@@ -236,8 +238,8 @@ func (c *schedulerCache) SetCandidateIndex(ctx context.Context, bucket service.S
 	candidateKey := schedulerCandidateKey(bucket)
 	tmpCandidateKey := fmt.Sprintf("%s:tmp:%s", candidateKey, buildID)
 	newCandidateIDs := make(map[string]struct{})
-	candidateMembers := make([]redis.Z, 0, len(accounts))
-	for _, account := range accounts {
+	candidateMembers := make([]redis.Z, 0, len(cacheableAccounts))
+	for _, account := range cacheableAccounts {
 		if !account.IsSchedulable() {
 			continue
 		}
@@ -509,9 +511,14 @@ func (c *schedulerCache) RestoreAccountCandidates(ctx context.Context, account *
 	if !account.IsSchedulable() {
 		return nil
 	}
-	if err := c.writeAccounts(ctx, []service.Account{*account}); err != nil {
+	cacheableAccounts, err := c.writeAccounts(ctx, []service.Account{*account})
+	if err != nil {
 		return err
 	}
+	if len(cacheableAccounts) == 0 {
+		return c.DeleteAccount(ctx, account.ID)
+	}
+	account = &cacheableAccounts[0]
 
 	id := strconv.FormatInt(account.ID, 10)
 	type addedCandidate struct {
@@ -582,13 +589,13 @@ func (c *schedulerCache) updateCandidateScore(ctx context.Context, accountID int
 		return err
 	}
 
-	fullPayload, err := json.Marshal(account)
+	fullPayload, metaPayload, err := marshalSchedulerCacheAccount(*account)
 	if err != nil {
-		return err
-	}
-	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(*account))
-	if err != nil {
-		return err
+		slog.Warn("scheduler cache removes account with unencodable payload",
+			"account_id", accountID,
+			"error", err,
+		)
+		return c.DeleteAccount(ctx, accountID)
 	}
 
 	pipe := c.rdb.Pipeline()
@@ -676,7 +683,14 @@ func (c *schedulerCache) SetAccount(ctx context.Context, account *service.Accoun
 	if account == nil || account.ID <= 0 {
 		return nil
 	}
-	return c.writeAccounts(ctx, []service.Account{*account})
+	cacheableAccounts, err := c.writeAccounts(ctx, []service.Account{*account})
+	if err != nil {
+		return err
+	}
+	if len(cacheableAccounts) == 0 {
+		return c.DeleteAccount(ctx, account.ID)
+	}
+	return nil
 }
 
 func (c *schedulerCache) DeleteAccount(ctx context.Context, accountID int64) error {
@@ -860,12 +874,13 @@ func decodeCachedAccount(val any) (*service.Account, error) {
 	return &account, nil
 }
 
-func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.Account) error {
+func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.Account) ([]service.Account, error) {
 	if len(accounts) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	pipe := c.rdb.Pipeline()
+	cacheableAccounts := make([]service.Account, 0, len(accounts))
 	pending := 0
 	flush := func() error {
 		if pending == 0 {
@@ -880,27 +895,43 @@ func (c *schedulerCache) writeAccounts(ctx context.Context, accounts []service.A
 	}
 
 	for _, account := range accounts {
-		fullPayload, err := json.Marshal(account)
+		fullPayload, metaPayload, err := marshalSchedulerCacheAccount(account)
 		if err != nil {
-			return err
-		}
-		metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
-		if err != nil {
-			return err
+			slog.Warn("scheduler cache skips account with unencodable payload",
+				"account_id", account.ID,
+				"error", err,
+			)
+			continue
 		}
 
 		id := strconv.FormatInt(account.ID, 10)
 		pipe.Set(ctx, schedulerAccountKey(id), fullPayload, 0)
 		pipe.Set(ctx, schedulerAccountMetaKey(id), metaPayload, 0)
+		cacheableAccounts = append(cacheableAccounts, account)
 		pending++
 		if pending >= c.writeChunkSize {
 			if err := flush(); err != nil {
-				return err
+				return nil, err
 			}
 		}
 	}
 
-	return flush()
+	if err := flush(); err != nil {
+		return nil, err
+	}
+	return cacheableAccounts, nil
+}
+
+func marshalSchedulerCacheAccount(account service.Account) ([]byte, []byte, error) {
+	fullPayload, err := json.Marshal(account)
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal account: %w", err)
+	}
+	metaPayload, err := json.Marshal(buildSchedulerMetadataAccount(account))
+	if err != nil {
+		return nil, nil, fmt.Errorf("marshal account metadata: %w", err)
+	}
+	return fullPayload, metaPayload, nil
 }
 
 func (c *schedulerCache) mgetChunked(ctx context.Context, keys []string) ([]any, error) {

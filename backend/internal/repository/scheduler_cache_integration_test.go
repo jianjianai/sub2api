@@ -103,6 +103,52 @@ func TestSchedulerCacheSnapshotUsesSlimMetadataButKeepsFullAccount(t *testing.T)
 	require.NotNil(t, full.AccountGroups[0].Group)
 }
 
+func TestSchedulerCacheSkipsAccountsWithUnencodableTimes(t *testing.T) {
+	ctx := context.Background()
+	rdb := testRedis(t)
+	cache := NewSchedulerCache(rdb)
+
+	bucket := service.SchedulerBucket{GroupID: 3, Platform: service.PlatformOpenAI, Mode: service.SchedulerModeSingle}
+	invalidTime := time.Date(10000, time.January, 1, 0, 0, 0, 0, time.UTC)
+	accounts := []service.Account{
+		{
+			ID:          111,
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			GroupIDs:    []int64{bucket.GroupID},
+		},
+		{
+			ID:          112,
+			Platform:    service.PlatformOpenAI,
+			Type:        service.AccountTypeAPIKey,
+			Status:      service.StatusActive,
+			Schedulable: true,
+			ExpiresAt:   &invalidTime,
+			GroupIDs:    []int64{bucket.GroupID},
+		},
+	}
+
+	require.NoError(t, cache.SetSnapshot(ctx, bucket, accounts))
+
+	snapshot, hit, err := cache.GetSnapshot(ctx, bucket)
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, snapshot, 1)
+	require.Equal(t, int64(111), snapshot[0].ID)
+
+	candidates, hit, err := cache.ListCandidateAccounts(ctx, bucket, service.SchedulerCandidateListOptions{Limit: 8})
+	require.NoError(t, err)
+	require.True(t, hit)
+	require.Len(t, candidates, 1)
+	require.Equal(t, int64(111), candidates[0].ID)
+
+	invalid, err := cache.GetAccount(ctx, 112)
+	require.NoError(t, err)
+	require.Nil(t, invalid)
+}
+
 func TestSchedulerCacheCandidateIndexLifecycle(t *testing.T) {
 	ctx := context.Background()
 	rdb := testRedis(t)
